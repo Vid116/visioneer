@@ -157,6 +157,9 @@ tests/
 OPENAI_API_KEY=sk-...      # For embeddings (text-embedding-3-large)
 ANTHROPIC_API_KEY=sk-...   # For Claude executor (claude-sonnet-4)
 
+# Coming soon (for tool use):
+SERPER_API_KEY=...         # For web search (or TAVILY_API_KEY)
+
 # Install and initialize:
 npm install
 npm run db:init
@@ -191,6 +194,20 @@ npm run status
 | Orientation rewrite | Claude-powered compression | Maintains semantic quality vs rule-based truncation |
 | Coherence checking | Pre-execution gate | Catch drift before wasting API calls |
 
+## API Costs (Approximate)
+
+The E2E chess test (3 cycles, 85 seconds):
+- ~3 Claude Sonnet calls (executor)
+- ~3 Claude Sonnet calls (orientation rewrites)
+- ~25 OpenAI embedding calls (chunks + searches)
+
+Estimate: **~$0.10-0.20 per cycle** depending on context size.
+
+Cost scales with:
+- Number of learnings stored (embedding costs)
+- Task complexity (longer Claude responses)
+- Orientation size (rewrite costs)
+
 ## Config Options (visioneer.config.json)
 
 | Setting | Default | What it does |
@@ -202,15 +219,29 @@ npm run status
 | agent.model | claude-sonnet-4-20250514 | Executor model |
 | orientation.activity_trigger_count | 50 | Activities before rewrite |
 
-## What's Next
+## Roadmap (Planned Order)
+
+1. **Tool Use in Executor** ← NEXT
+   - Give Claude web_search, web_fetch, write_artifact, read_artifact
+   - Transform from "thinking" to "researching and creating"
+
+2. **Oversight Web UI**
+   - Dashboard to watch progress
+   - Answer questions async
+   - View knowledge graph
+
+3. **Harder Goals**
+   - Test with domains requiring real research
+   - Multi-source synthesis
+   - Longer learning arcs
+
+## What's Next (Backlog)
 
 | Component | State |
 |-----------|-------|
 | Multi-task cycle | One task per `agent:cycle` for now |
 | Scheduled triggers | No cron/timer yet |
 | MCP working/knowledge servers | Built but untested |
-| Web UI / dashboard | CLI only |
 | Notifications | No alerts for questions/milestones |
 | Sub-agent spawning | Single Claude call per task |
-| Tool use in execution | Claude can only "think", not browse/write files |
 | Continuous learning mode | Run multiple cycles automatically |
