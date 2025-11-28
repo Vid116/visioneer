@@ -1,0 +1,41 @@
+{
+  "name": "visioneer",
+  "version": "0.1.0",
+  "description": "Autonomous AI agent architecture for long-running learning and execution projects",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest",
+    "db:init": "tsx src/db/init.ts",
+    "db:reset": "rm -f visioneer.db && npm run db:init",
+    "mcp:orientation": "tsx src/mcp/orientation.ts",
+    "mcp:working": "tsx src/mcp/working.ts",
+    "mcp:knowledge": "tsx src/mcp/knowledge.ts",
+    "agent:cycle": "tsx src/agent/cycle.ts",
+    "status": "tsx src/cli/status.ts",
+    "answer": "tsx src/cli/answer.ts",
+    "goal": "tsx src/cli/goal.ts",
+    "warnings": "tsx src/cli/warnings.ts",
+    "test:e2e": "tsx tests/e2e-chess-test.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.24.0",
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "better-sqlite3": "^9.4.3",
+    "dotenv": "^17.2.3",
+    "openai": "^4.28.0",
+    "uuid": "^9.0.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.9",
+    "@types/node": "^20.11.0",
+    "@types/uuid": "^9.0.8",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0"
+  }
+}

@@ -1,0 +1,126 @@
+Updated Spec Additions
+1. Goal History (Option B it is)
+sqlCREATE TABLE goals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  goal TEXT NOT NULL,
+  active INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  completed_at TEXT,
+  outcome TEXT  -- what was learned/achieved before switching
+);
+Benefit: When the system gets big, you can look back and see:
+
+"What goals have I pursued?"
+"What did I learn from each?"
+"Am I repeating myself?"
+
+Could even do retrieval on past goals: "I tried something similar 6 months ago, here's what worked..."
+CLI addition:
+bashnpm run goal --history        # Show past goals for this project
+npm run goal --history --all  # Show past goals across all projects
+2. Auto-reprioritization: Finish Current Cycle First
+Behavior:
+
+When goal changes mid-cycle → flag it, but don't interrupt
+Store pending_goal temporarily
+At end of cycle, apply the new goal and reprioritize
+Log: "Goal queued, will apply after current task completes"
+
+typescript// In goal.ts CLI
+if (currentlyExecuting) {
+  await setPendingGoal(projectId, newGoal);
+  console.log("⏳ Goal queued. Will apply after current cycle completes.");
+} else {
+  await setGoal(projectId, newGoal);
+  await reprioritizeTasks(projectId);
+  console.log("✅ Goal set and tasks reprioritized.");
+}
+typescript// At end of cycle (in execution.ts or cycle.ts)
+const pendingGoal = await getPendingGoal(projectId);
+if (pendingGoal) {
+  await setGoal(projectId, pendingGoal);
+  await clearPendingGoal(projectId);
+  await reprioritizeTasks(projectId);
+  logActivity(projectId, 'goal_applied', `Queued goal now active: "${pendingGoal}"`);
+}
+3. Coherence: Stop, Warn, Offer Options
+Behavior when task seems off-track:
+
+Stop the task (don't execute it)
+Move on to next task in queue
+Log warning with the concern
+Give user easy options:
+
+typescriptinterface CoherenceWarning {
+  id: string;
+  task_id: string;
+  project_id: string;
+  concern: string;           // Why it seems off-track
+  suggestion?: string;       // What might be better
+  created_at: string;
+  resolved: boolean;
+  resolution?: 'executed' | 'dismissed' | 'modified';
+}
+New table:
+sqlCREATE TABLE coherence_warnings (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  concern TEXT NOT NULL,
+  suggestion TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  resolved INTEGER DEFAULT 0,
+  resolution TEXT  -- 'executed', 'dismissed', 'modified'
+);
+CLI addition:
+bashnpm run warnings                    # List unresolved warnings
+npm run warnings resolve <id> exec  # Execute the task anyway
+npm run warnings resolve <id> skip  # Dismiss, don't execute
+npm run warnings resolve <id> edit  # Modify the task (opens editor or prompts)
+```
+
+**Output example:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│ COHERENCE WARNINGS (2 unresolved)                           │
+├─────────────────────────────────────────────────────────────┤
+│ [1] Task: "Research jazz history 1920-1950"                 │
+│     Concern: Goal is practical voicings, this is theory     │
+│     Suggestion: Skip or defer until fundamentals are solid  │
+│     → npm run warnings resolve 1 exec|skip|edit             │
+│                                                             │
+│ [2] Task: "Compare 17 different jazz piano methods"         │
+│     Concern: Analysis paralysis, goal wants immediate use   │
+│     Suggestion: Pick one method and start practicing        │
+│     → npm run warnings resolve 2 exec|skip|edit             │
+└─────────────────────────────────────────────────────────────┘
+
+Updated Implementation Order
+
+Schema changes
+
+Add goals table (with history)
+Add coherence_warnings table
+Add pending_goal field to projects (or separate table)
+
+
+goal.ts CLI — set/view/clear/history + pending goal logic
+warnings.ts CLI — list/resolve warnings
+Prioritization update — add goal alignment as 6th factor
+Coherence check module — new file, checks before task execution
+Cycle integration
+
+Check coherence before executing
+Apply pending goal at end of cycle
+Store warnings when coherence fails
+
+
+Orientation rewrite — fix persistence, trigger on goal change
+
+
+Summary of User Control
+After this, you'll have:
+CommandWhat it doesnpm run goal "..."Set what you want to achievenpm run goalSee current goalnpm run goal --historySee past goals and what was learnednpm run warningsSee tasks that were flagged as off-tracknpm run warnings resolve <id> exec/skip/editDecide what to do with flagged tasksnpm run statusOverall project view (now includes goal)npm run agent:cycleExecute next task (respects goal, checks coherence)
+
+That's the full spec. Ready to hand off to Claude Code?

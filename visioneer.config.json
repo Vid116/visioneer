@@ -1,0 +1,54 @@
+{
+  "version": "1.0",
+  
+  "embedding": {
+    "provider": "openai",
+    "model": "text-embedding-3-large",
+    "dimensions": 3072,
+    "batch_size": 100
+  },
+  
+  "storage": {
+    "database_path": "./visioneer.db",
+    "backup_enabled": true,
+    "backup_interval_hours": 24
+  },
+  
+  "orientation": {
+    "max_tokens": 2500,
+    "time_trigger_hours": 48,
+    "activity_trigger_count": 50,
+    "decisions_to_keep": 7,
+    "priorities_to_keep": 5
+  },
+  
+  "working": {
+    "activity_log_size": 100,
+    "task_history_days": 30
+  },
+  
+  "knowledge": {
+    "min_similarity_threshold": 0.7,
+    "default_search_limit": 10,
+    "coretrieval_threshold": 3,
+    "implicit_relationship_initial_weight": 0.2,
+    "strengthen_amount": 0.05,
+    "weaken_amount": 0.3,
+    "archive_weight_threshold": 0.05
+  },
+  
+  "retrieval": {
+    "recency_boost_halflife_days": 30,
+    "confidence_weights": {
+      "verified": 1.0,
+      "inferred": 0.8,
+      "speculative": 0.5
+    }
+  },
+  
+  "agent": {
+    "model": "claude-sonnet-4-20250514",
+    "max_tasks_per_session": 10,
+    "question_batch_threshold": 3
+  }
+}
