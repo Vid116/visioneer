@@ -20,7 +20,7 @@ import {
 } from "../db/queries.js";
 import { embed } from "../embedding/index.js";
 import { getKnowledgeConfig, getRetrievalConfig } from "../utils/config.js";
-import { Chunk, Task, Question, Relationship, Activity } from "../utils/types.js";
+import { Chunk, Task, Question, Relationship, Activity, TaskStatus } from "../utils/types.js";
 import { dbLogger } from "../utils/logger.js";
 
 // =============================================================================
@@ -336,7 +336,7 @@ async function executeOperationalQuery(
   const params = plan.params;
 
   if (params.taskStatus) {
-    result.tasks = getTasks(projectId, params.taskStatus as string);
+    result.tasks = getTasks(projectId, params.taskStatus as TaskStatus);
   }
 
   if (params.questionStatus) {

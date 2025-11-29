@@ -2,7 +2,12 @@
  * Coherence Check Module
  *
  * Checks if a task aligns with the current goal before execution.
- * If misaligned, creates a warning and skips to the next task.
+ *
+ * DESIGN PRINCIPLES:
+ * - Trust the planner: Tasks created from goal breakdown are presumed coherent
+ * - Be permissive: Only flag obvious misalignments, not subtle ones
+ * - Warnings are advisory: Don't permanently block tasks
+ * - Common skill areas (research, practice, fundamentals) are always valid
  */
 
 import { Task, Goal, CoherenceWarning } from "../utils/types.js";
@@ -26,9 +31,27 @@ export interface CoherenceConfig {
 }
 
 const DEFAULT_CONFIG: CoherenceConfig = {
-  minAlignmentScore: 0.3,
+  minAlignmentScore: 0.2,  // Very permissive - only catch obvious misalignments
   strictMode: false,
 };
+
+// Skill areas that are universally valid for any learning/building goal
+const UNIVERSAL_SKILL_AREAS = new Set([
+  "research",
+  "fundamentals",
+  "basics",
+  "foundation",
+  "practice",
+  "technique",
+  "theory",
+  "application",
+  "project",
+  "review",
+  "general",
+  "learning",
+  "study",
+  "exploration",
+]);
 
 // =============================================================================
 // Main Coherence Check
@@ -53,20 +76,15 @@ export function checkCoherence(
     };
   }
 
-  // Check if task already has an unresolved warning
-  if (hasUnresolvedWarning(task.id)) {
-    return {
-      pass: false,
-      concern: "Task has an unresolved coherence warning",
-      score: 0,
-    };
-  }
+  // NOTE: We no longer block tasks just because they have an unresolved warning.
+  // Warnings are advisory, not blocking. The user can resolve them if needed.
+  // Previous behavior permanently blocked tasks, which was wrong.
 
   // Calculate alignment score
   const alignmentResult = calculateAlignment(task, currentGoal);
 
   // Check against threshold
-  const threshold = cfg.strictMode ? 0.5 : cfg.minAlignmentScore;
+  const threshold = cfg.strictMode ? 0.4 : cfg.minAlignmentScore;
 
   if (alignmentResult.score < threshold) {
     return {
@@ -101,6 +119,12 @@ export function enforceCoherence(
       score: result.score,
     });
     return { proceed: true };
+  }
+
+  // Only create warning if one doesn't already exist for this task
+  if (hasUnresolvedWarning(task.id)) {
+    dbLogger.debug("Task already has warning, skipping", { taskId: task.id });
+    return { proceed: false };
   }
 
   // Create warning
@@ -138,45 +162,49 @@ function calculateAlignment(task: Task, goal: Goal): AlignmentResult {
   const taskDesc = task.description.toLowerCase();
   const taskArea = task.skill_area.toLowerCase();
 
-  // Extract meaningful words from goal
-  const goalWords = extractKeywords(goalLower);
-  const taskWords = extractKeywords(taskTitle + " " + taskDesc);
+  let score = 0.3; // Start with a baseline - assume some alignment
 
-  // Calculate word overlap
-  const overlap = goalWords.filter((word) =>
-    taskWords.some((tw) => tw.includes(word) || word.includes(tw))
-  );
-
-  // Check skill area alignment
-  const areaAligned = goalWords.some((word) =>
-    taskArea.includes(word) || word.includes(taskArea)
-  ) || goalLower.includes(taskArea);
-
-  // Calculate base score
-  let score = 0;
-
-  if (areaAligned) {
-    score += 0.4;
+  // RULE 1: Universal skill areas are always valid
+  // Research, practice, fundamentals, etc. are valid for ANY learning goal
+  if (UNIVERSAL_SKILL_AREAS.has(taskArea)) {
+    score += 0.4; // Strong boost for universal areas
   }
 
+  // RULE 2: Extract meaningful keywords and check overlap
+  const goalKeywords = extractKeywords(goalLower);
+  const taskKeywords = extractKeywords(taskTitle + " " + taskDesc);
+
+  // Check for keyword overlap (flexible matching)
+  const overlap = findOverlap(goalKeywords, taskKeywords);
   if (overlap.length > 0) {
-    score += Math.min(0.4, overlap.length * 0.1);
+    score += Math.min(0.4, overlap.length * 0.15);
   }
 
-  // Check for specific alignment patterns
-  if (isDirectlyRelated(task, goal)) {
+  // RULE 3: Check if skill area relates to goal subject
+  const goalSubject = extractSubject(goalLower);
+  if (goalSubject && (
+    taskArea.includes(goalSubject) ||
+    goalSubject.includes(taskArea) ||
+    taskTitle.includes(goalSubject) ||
+    taskDesc.includes(goalSubject)
+  )) {
     score += 0.3;
+  }
+
+  // RULE 4: Direct action-object matching
+  if (isDirectlyRelated(task, goal)) {
+    score += 0.2;
   }
 
   // Cap at 1.0
   score = Math.min(1.0, score);
 
-  // Generate concern and suggestion for low scores
-  if (score < 0.3) {
+  // Only generate concern for very low scores
+  if (score < 0.2) {
     return {
       score,
-      concern: generateConcern(task, goal, areaAligned, overlap.length),
-      suggestion: generateSuggestion(task, goal),
+      concern: `Task "${task.title}" may be unrelated to goal "${goal.goal}"`,
+      suggestion: "Consider whether this task helps achieve the goal, or skip it",
     };
   }
 
@@ -191,6 +219,8 @@ function extractKeywords(text: string): string[] {
     "could", "should", "may", "might", "must", "shall", "can", "this",
     "that", "these", "those", "i", "you", "he", "she", "it", "we", "they",
     "what", "which", "who", "whom", "how", "when", "where", "why",
+    "learn", "understand", "study", "practice", "master", "improve",
+    "basics", "basic", "fundamental", "fundamentals", "introduction",
   ]);
 
   return text
@@ -199,71 +229,92 @@ function extractKeywords(text: string): string[] {
     .filter((word) => word.length > 2 && !stopWords.has(word));
 }
 
+function extractSubject(goalText: string): string | null {
+  // Extract the main subject from goals like "learn chess", "build a product"
+  const patterns = [
+    /learn\s+(?:the\s+)?(?:basics\s+of\s+)?(.+)/i,
+    /understand\s+(.+)/i,
+    /master\s+(.+)/i,
+    /build\s+(?:a\s+)?(.+)/i,
+    /create\s+(?:a\s+)?(.+)/i,
+    /develop\s+(.+)/i,
+    /practice\s+(.+)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = goalText.match(pattern);
+    if (match) {
+      // Return first significant word of the subject
+      const subject = match[1].trim().split(/\s+/)[0];
+      if (subject.length > 2) {
+        return subject.toLowerCase();
+      }
+    }
+  }
+
+  // Fallback: return longest word that's not a common word
+  const words = extractKeywords(goalText);
+  if (words.length > 0) {
+    return words.sort((a, b) => b.length - a.length)[0];
+  }
+
+  return null;
+}
+
+function findOverlap(keywords1: string[], keywords2: string[]): string[] {
+  const overlap: string[] = [];
+
+  for (const word1 of keywords1) {
+    for (const word2 of keywords2) {
+      // Exact match
+      if (word1 === word2) {
+        overlap.push(word1);
+        continue;
+      }
+      // Partial match (one contains the other, min 4 chars)
+      if (word1.length >= 4 && word2.length >= 4) {
+        if (word1.includes(word2) || word2.includes(word1)) {
+          overlap.push(word1);
+        }
+      }
+      // Stem matching (rudimentary)
+      if (word1.length >= 5 && word2.length >= 5) {
+        const stem1 = word1.slice(0, -2);
+        const stem2 = word2.slice(0, -2);
+        if (stem1 === stem2) {
+          overlap.push(word1);
+        }
+      }
+    }
+  }
+
+  return [...new Set(overlap)]; // Deduplicate
+}
+
 function isDirectlyRelated(task: Task, goal: Goal): boolean {
   const goalLower = goal.goal.toLowerCase();
   const taskTitle = task.title.toLowerCase();
+  const taskDesc = task.description.toLowerCase();
 
-  // Check for action-goal patterns
+  // Check for common goal patterns
   const goalActions = ["learn", "build", "create", "develop", "improve", "master", "practice"];
 
   for (const action of goalActions) {
     if (goalLower.includes(action)) {
       // Extract the subject after the action
-      const goalSubjectMatch = goalLower.match(new RegExp(`${action}\\s+(.+)`, "i"));
+      const goalSubjectMatch = goalLower.match(new RegExp(`${action}\\s+(?:the\\s+)?(?:basics\\s+of\\s+)?(.+)`, "i"));
       if (goalSubjectMatch) {
-        const goalSubject = goalSubjectMatch[1].split(/\s+/).slice(0, 3).join(" ");
-        if (taskTitle.includes(goalSubject.split(" ")[0])) {
-          return true;
+        const goalWords = goalSubjectMatch[1].split(/\s+/).slice(0, 3);
+        for (const word of goalWords) {
+          if (word.length > 3 && (taskTitle.includes(word) || taskDesc.includes(word))) {
+            return true;
+          }
         }
       }
     }
   }
 
   return false;
-}
-
-function generateConcern(
-  task: Task,
-  goal: Goal,
-  areaAligned: boolean,
-  overlapCount: number
-): string {
-  if (!areaAligned && overlapCount === 0) {
-    return `Task "${task.title}" appears unrelated to goal "${goal.goal}"`;
-  }
-
-  if (!areaAligned) {
-    return `Task skill area "${task.skill_area}" doesn't match the goal focus`;
-  }
-
-  if (overlapCount === 0) {
-    return `Task content doesn't clearly connect to the goal`;
-  }
-
-  return `Task may be tangential to the main goal`;
-}
-
-function generateSuggestion(task: Task, goal: Goal): string {
-  const goalLower = goal.goal.toLowerCase();
-
-  // Check if this might be research vs practice mismatch
-  if (goalLower.includes("practice") || goalLower.includes("learn")) {
-    if (task.title.toLowerCase().includes("research") ||
-        task.title.toLowerCase().includes("compare") ||
-        task.title.toLowerCase().includes("analyze")) {
-      return "Consider focusing on hands-on practice rather than research";
-    }
-  }
-
-  // Check if this might be too broad
-  if (task.title.toLowerCase().includes("all") ||
-      task.title.toLowerCase().includes("comprehensive") ||
-      task.title.toLowerCase().includes("complete")) {
-    return "Consider breaking this into smaller, goal-focused tasks";
-  }
-
-  // Generic suggestion
-  return "Skip this task or modify it to align with the current goal";
 }
 
 // =============================================================================

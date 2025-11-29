@@ -16,6 +16,7 @@ All core phases complete and **proven working** with real API calls.
 | 4. Autonomous Execution | ✅ | Real Claude API calls, stores learnings, dependency unblocking |
 | 5. Goal & Coherence | ✅ | Goal tracking, coherence warnings, auto-reprioritization |
 | 6. E2E Validation | ✅ | Proven with chess learning test (6/6 criteria passed) |
+| 7. Tool Use | ✅ | Web search, web fetch, artifact read/write |
 
 ## E2E Test Results (Chess Learning)
 
@@ -53,6 +54,7 @@ npm run status        # See progress
 ## CLI Commands
 
 ```bash
+npm run dashboard     # Live-updating terminal dashboard (q: quit, r: refresh, a: answer)
 npm run status        # Project overview, task counts, recent activity
 npm run agent:cycle   # Execute ONE task via Claude API
 npm run answer        # List/answer open questions
@@ -108,11 +110,15 @@ src/
 │   ├── wakeup.ts              # State reconstruction on wake
 │   ├── prioritization.ts      # 6-factor task scoring (incl. goal alignment)
 │   ├── execution.ts           # Work loop, result handling, coherence checks
-│   ├── executor.ts            # Claude API integration
+│   ├── executor.ts            # Claude API integration with tool loop
 │   ├── cycle.ts               # Single cycle runner
 │   ├── coherence.ts           # Coherence checking module
-│   └── orientation-rewrite.ts # Auto-rewrite orientation on triggers
+│   ├── orientation-rewrite.ts # Auto-rewrite orientation on triggers
+│   └── tools/
+│       ├── index.ts           # Tool definitions for Claude API
+│       └── executor.ts        # Tool implementations (search, fetch, artifacts)
 ├── cli/
+│   ├── dashboard.ts           # Live-updating terminal dashboard
 │   ├── status.ts              # Project status display
 │   ├── answer.ts              # Question answering
 │   ├── goal.ts                # Goal management CLI
@@ -156,9 +162,7 @@ tests/
 # .env file needs:
 OPENAI_API_KEY=sk-...      # For embeddings (text-embedding-3-large)
 ANTHROPIC_API_KEY=sk-...   # For Claude executor (claude-sonnet-4)
-
-# Coming soon (for tool use):
-SERPER_API_KEY=...         # For web search (or TAVILY_API_KEY)
+SERPER_API_KEY=...         # For web search tool
 
 # Install and initialize:
 npm install
@@ -182,6 +186,9 @@ npm run status
 - **Co-retrieval tracking**: Records which chunks retrieved together
 - **Relationship evolution**: Strengthens connections on use, weakens on contradiction
 - **E2E test**: Proves autonomous learning works
+- **Tool use in executor**: web_search (Serper), web_fetch (HTML extraction), write_artifact, read_artifact
+- **Tool loop**: Handles multiple tool calls per task, feeds results back to Claude
+- **Real research**: Agent reads actual web sources, extracts specific facts
 
 ## Design Decisions
 
@@ -203,10 +210,15 @@ The E2E chess test (3 cycles, 85 seconds):
 
 Estimate: **~$0.10-0.20 per cycle** depending on context size.
 
+With tools enabled:
+- Serper API: ~$0.001 per search (1000 free searches on signup)
+- Tool-enabled cycles cost more (additional Claude tokens for tool loop)
+
 Cost scales with:
 - Number of learnings stored (embedding costs)
 - Task complexity (longer Claude responses)
 - Orientation size (rewrite costs)
+- Tool usage (more API round-trips)
 
 ## Config Options (visioneer.config.json)
 
@@ -219,18 +231,46 @@ Cost scales with:
 | agent.model | claude-sonnet-4-20250514 | Executor model |
 | orientation.activity_trigger_count | 50 | Activities before rewrite |
 
+## Tools Configuration
+
+Tools are configured in `visioneer.config.json`:
+
+```json
+"tools": {
+  "web_search": { "enabled": true, "provider": "serper", "max_results": 5 },
+  "web_fetch": { "enabled": true, "max_content_length": 10000 },
+  "artifacts": { "enabled": true, "directory": "./artifacts" }
+}
+```
+
+Required API keys in `.env`:
+- `SERPER_API_KEY` - For web search
+
+Disable tools by setting `"enabled": false` in config.
+
+**Test tools manually:**
+```bash
+npx tsx tests/test-tools.ts
+```
+
 ## Roadmap (Planned Order)
 
-1. **Tool Use in Executor** ← NEXT
-   - Give Claude web_search, web_fetch, write_artifact, read_artifact
-   - Transform from "thinking" to "researching and creating"
+1. ~~**Tool Use in Executor**~~ ✅ Complete
+   - ~~Give Claude web_search, web_fetch, write_artifact, read_artifact~~
+   - ~~Transform from "thinking" to "researching and creating"~~
 
-2. **Oversight Web UI**
-   - Dashboard to watch progress
-   - Answer questions async
-   - View knowledge graph
+2. ~~**CLI Oversight Dashboard**~~ ✅ Complete
+   - ~~Live-updating terminal dashboard (`npm run dashboard`)~~
+   - ~~Shows progress bar, task/knowledge counts, recent activity~~
+   - ~~Tool calls logged to activity feed~~
+   - ~~Keyboard controls: q (quit), r (refresh), a (answer questions)~~
 
-3. **Harder Goals**
+3. **Oversight Web UI** ← NEXT
+   - Web-based dashboard for browser access
+   - View knowledge graph visualization
+   - More advanced question answering interface
+
+4. **Harder Goals**
    - Test with domains requiring real research
    - Multi-source synthesis
    - Longer learning arcs
@@ -239,6 +279,8 @@ Cost scales with:
 
 | Component | State |
 |-----------|-------|
+| CLI Dashboard | ✅ Complete - `npm run dashboard` |
+| Oversight Web UI | Web dashboard, knowledge graph visualization |
 | Multi-task cycle | One task per `agent:cycle` for now |
 | Scheduled triggers | No cron/timer yet |
 | MCP working/knowledge servers | Built but untested |

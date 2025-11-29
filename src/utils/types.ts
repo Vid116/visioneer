@@ -97,6 +97,17 @@ export interface Task {
   updated_at: string;
   started_at: string | null;
   completed_at: string | null;
+  // Failure tracking for retry logic
+  failure_reason: string | null;
+  failure_context: FailureContext | null;
+  failed_at: string | null;
+}
+
+export interface FailureContext {
+  toolCalls?: Array<{ name: string; count: number }>;
+  partialResults?: string;
+  iterations?: number;
+  error?: string;
 }
 
 export interface Question {
@@ -247,7 +258,7 @@ export interface AgentState {
 // -----------------------------------------------------------------------------
 
 export interface EmbeddingConfig {
-  provider: "openai" | "voyage" | "ollama";
+  provider: "openai" | "voyage" | "ollama" | "mock";
   model: string;
   dimensions: number;
   batch_size: number;
@@ -297,6 +308,28 @@ export interface AgentConfig {
   question_batch_threshold: number;
 }
 
+export interface WebSearchConfig {
+  enabled: boolean;
+  provider: "serper" | "tavily" | "serpapi";
+  max_results: number;
+}
+
+export interface WebFetchConfig {
+  enabled: boolean;
+  max_content_length: number;
+}
+
+export interface ArtifactsConfig {
+  enabled: boolean;
+  directory: string;
+}
+
+export interface ToolsConfig {
+  web_search: WebSearchConfig;
+  web_fetch: WebFetchConfig;
+  artifacts: ArtifactsConfig;
+}
+
 export interface VisioneerConfig {
   version: string;
   embedding: EmbeddingConfig;
@@ -306,4 +339,5 @@ export interface VisioneerConfig {
   knowledge: KnowledgeConfig;
   retrieval: RetrievalConfig;
   agent: AgentConfig;
+  tools?: ToolsConfig;
 }

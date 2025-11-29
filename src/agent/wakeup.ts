@@ -249,25 +249,40 @@ function evaluateWorkQueue(params: {
     openQuestions,
   } = params;
 
+  // Check for blocked tasks that are actually ready for retry
+  // A task is "retryable" if it's blocked with failure_context but no blocking questions
+  const retryableTasks = blockedTasks.filter((task) => {
+    const hasFailureContext = task.failure_reason && task.failure_context;
+    const hasBlockingQuestions = task.blocked_by.length > 0;
+    return hasFailureContext && !hasBlockingQuestions;
+  });
+
+  // Combine ready tasks with retryable tasks
+  const actionableTasks = [...readyTasks, ...retryableTasks];
+
   // Case 1: Has actionable work
-  if (readyTasks.length > 0 || inProgressTasks.length > 0) {
-    // Resume in-progress task first, or pick from ready queue
-    const currentTask = inProgressTasks[0] || readyTasks[0];
+  if (actionableTasks.length > 0 || inProgressTasks.length > 0) {
+    // Resume in-progress task first, or pick from actionable queue
+    const currentTask = inProgressTasks[0] || actionableTasks[0];
 
     return {
       status: "ready",
       orientation,
       current_task: currentTask,
-      task_queue: readyTasks.filter((t) => t.id !== currentTask?.id),
+      task_queue: actionableTasks.filter((t) => t.id !== currentTask?.id),
       open_questions: openQuestions,
       context_loaded: true,
     };
   }
 
-  // Case 2: All tasks blocked
-  if (blockedTasks.length > 0) {
+  // Case 2: All tasks blocked (not retryable)
+  const nonRetryableBlocked = blockedTasks.filter(
+    (t) => !retryableTasks.includes(t)
+  );
+
+  if (nonRetryableBlocked.length > 0) {
     // Check if all blockers are questions
-    const allBlockedOnQuestions = blockedTasks.every((task) => {
+    const allBlockedOnQuestions = nonRetryableBlocked.every((task) => {
       // Task is blocked if it has blocked_by entries (question IDs)
       return task.blocked_by.length > 0;
     });

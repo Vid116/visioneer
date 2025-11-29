@@ -50,5 +50,21 @@
     "model": "claude-sonnet-4-20250514",
     "max_tasks_per_session": 10,
     "question_batch_threshold": 3
+  },
+
+  "tools": {
+    "web_search": {
+      "enabled": true,
+      "provider": "serper",
+      "max_results": 5
+    },
+    "web_fetch": {
+      "enabled": true,
+      "max_content_length": 10000
+    },
+    "artifacts": {
+      "enabled": true,
+      "directory": "./artifacts"
+    }
   }
 }

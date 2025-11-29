@@ -29,7 +29,10 @@ import {
   getPendingGoal,
   setPendingGoal,
   getTasks,
+  createProject,
+  saveOrientation,
 } from "../db/queries.js";
+import { Orientation, Phase } from "../utils/types.js";
 
 function parseArgs(): {
   projectId?: string;
@@ -104,11 +107,37 @@ function run() {
   if (!projectId) {
     const projects = listProjects();
     if (projects.length === 0) {
-      console.log("No projects found. Create a project first.");
-      closeDatabase();
-      process.exit(1);
+      // Auto-create a project if setting a goal
+      if (goalText) {
+        console.log("No projects found. Creating a new project...");
+        const newProject = createProject();
+        projectId = newProject.id;
+
+        // Create initial orientation based on the goal
+        const orientation: Orientation = {
+          project_id: projectId,
+          vision_summary: goalText,
+          success_criteria: ["Accomplish the stated goal"],
+          constraints: [],
+          skill_map: [],
+          current_phase: "intake" as Phase,
+          key_decisions: [],
+          active_priorities: [],
+          progress_snapshot: [],
+          last_rewritten: new Date().toISOString(),
+          version: 1,
+        };
+        saveOrientation(orientation);
+        console.log(`Created project: ${projectId.slice(0, 8)}...`);
+      } else {
+        console.log("No projects found. Create a project first by setting a goal:");
+        console.log('  npm run goal "Your learning goal here"');
+        closeDatabase();
+        process.exit(1);
+      }
+    } else {
+      projectId = projects[0].id;
     }
-    projectId = projects[0].id;
   }
 
   const project = getProject(projectId);

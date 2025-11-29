@@ -105,9 +105,9 @@ function printStatus() {
     console.log("┌─ Progress ──────────────────────────────────────────────────┐");
 
     for (const progress of orientation.progress_snapshot) {
-      const bar = buildProgressBar(progress.percent);
-      console.log(`  ${progress.area}: ${bar} ${progress.percent}% (${progress.status})`);
-      if (progress.blockers.length > 0) {
+      const bar = buildProgressBar(progress.percent ?? 0);
+      console.log(`  ${progress.area}: ${bar} ${progress.percent ?? 0}% (${progress.status})`);
+      if (progress.blockers?.length > 0) {
         console.log(`    ⚠️  Blockers: ${progress.blockers.join(", ")}`);
       }
     }
@@ -174,7 +174,7 @@ function printStatus() {
       if (q.context) {
         console.log(`     ${q.context.slice(0, 60)}...`);
       }
-      console.log(`     Blocks: ${q.blocking_task_ids.length} task(s)`);
+      console.log(`     Blocks: ${q.blocks_tasks.length} task(s)`);
       console.log();
     }
 

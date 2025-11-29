@@ -15,11 +15,13 @@
     "mcp:working": "tsx src/mcp/working.ts",
     "mcp:knowledge": "tsx src/mcp/knowledge.ts",
     "agent:cycle": "tsx src/agent/cycle.ts",
+    "agent:continuous": "tsx src/agent/cycle.ts --continuous",
     "status": "tsx src/cli/status.ts",
     "answer": "tsx src/cli/answer.ts",
     "goal": "tsx src/cli/goal.ts",
     "warnings": "tsx src/cli/warnings.ts",
-    "test:e2e": "tsx tests/e2e-chess-test.ts"
+    "test:e2e": "tsx tests/e2e-chess-test.ts",
+    "dashboard": "tsx src/cli/dashboard.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.24.0",

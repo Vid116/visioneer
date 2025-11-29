@@ -39,7 +39,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     started_at TIMESTAMP,
-    completed_at TIMESTAMP
+    completed_at TIMESTAMP,
+    -- Failure tracking for retry logic
+    failure_reason TEXT,       -- Why the task failed (error message)
+    failure_context TEXT,      -- JSON: tool calls made, partial results, etc.
+    failed_at TIMESTAMP        -- When the failure occurred
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(project_id, status);

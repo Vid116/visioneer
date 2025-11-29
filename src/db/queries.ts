@@ -158,6 +158,9 @@ export function createTask(
     updated_at: now,
     started_at: null,
     completed_at: null,
+    failure_reason: null,
+    failure_context: null,
+    failed_at: null,
   };
 }
 
@@ -205,24 +208,27 @@ export function updateTask(
     blocked_by: string[];
     description: string;
     outcome: string;
+    failure_reason: string | null;
+    failure_context: Record<string, unknown> | null;
+    failed_at: string | null;
   }>
 ): Task | null {
   const task = getTask(taskId);
   if (!task) return null;
-  
+
   const now = new Date().toISOString();
   const sets: string[] = [];
   const params: unknown[] = [];
-  
+
   if (updates.status !== undefined) {
     sets.push("status = ?");
     params.push(updates.status);
-    
+
     if (updates.status === "in_progress" && !task.started_at) {
       sets.push("started_at = ?");
       params.push(now);
     }
-    
+
     if (updates.status === "done") {
       sets.push("completed_at = ?");
       params.push(now);
@@ -230,32 +236,53 @@ export function updateTask(
       // Check and unblock dependent tasks after this update completes
       setTimeout(() => unblockDependentTasks(taskId), 0);
     }
+
+    // Clear failure fields when task becomes ready or done
+    if (updates.status === "ready" || updates.status === "done") {
+      sets.push("failure_reason = NULL, failure_context = NULL, failed_at = NULL");
+    }
   }
-  
+
   if (updates.blocked_by !== undefined) {
     sets.push("blocked_by = ?");
     params.push(JSON.stringify(updates.blocked_by));
   }
-  
+
   if (updates.description !== undefined) {
     sets.push("description = ?");
     params.push(updates.description);
   }
-  
+
   if (updates.outcome !== undefined) {
     sets.push("outcome = ?");
     params.push(updates.outcome);
   }
-  
+
+  // Handle failure fields
+  if (updates.failure_reason !== undefined) {
+    sets.push("failure_reason = ?");
+    params.push(updates.failure_reason);
+  }
+
+  if (updates.failure_context !== undefined) {
+    sets.push("failure_context = ?");
+    params.push(updates.failure_context ? JSON.stringify(updates.failure_context) : null);
+  }
+
+  if (updates.failed_at !== undefined) {
+    sets.push("failed_at = ?");
+    params.push(updates.failed_at);
+  }
+
   if (sets.length === 0) return task;
-  
+
   params.push(taskId);
-  
+
   const sql = `UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`;
   getDatabase().prepare(sql).run(...params);
-  
+
   dbLogger.debug("Updated task", { taskId, updates });
-  
+
   return getTask(taskId);
 }
 
@@ -319,6 +346,11 @@ function rowToTask(row: Record<string, unknown>): Task {
     updated_at: row.updated_at as string,
     started_at: row.started_at as string | null,
     completed_at: row.completed_at as string | null,
+    failure_reason: row.failure_reason as string | null,
+    failure_context: row.failure_context
+      ? JSON.parse(row.failure_context as string)
+      : null,
+    failed_at: row.failed_at as string | null,
   };
 }
 

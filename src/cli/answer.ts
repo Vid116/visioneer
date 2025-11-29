@@ -85,10 +85,10 @@ function listOpenQuestions(projectId: string) {
       console.log(`  Context: ${q.context}`);
     }
 
-    if (q.blocking_task_ids.length > 0) {
+    if (q.blocks_tasks.length > 0) {
       console.log();
-      console.log(`  Blocking ${q.blocking_task_ids.length} task(s):`);
-      for (const taskId of q.blocking_task_ids) {
+      console.log(`  Blocking ${q.blocks_tasks.length} task(s):`);
+      for (const taskId of q.blocks_tasks) {
         const task = getTask(taskId);
         if (task) {
           console.log(`    • ${task.title}`);
@@ -118,7 +118,7 @@ function showQuestion(projectId: string, partialId: string) {
   console.log("┌─────────────────────────────────────────────────────────────┐");
   console.log(`  ID: ${question.id}`);
   console.log(`  Status: ${question.status}`);
-  console.log(`  Created: ${question.created_at}`);
+  console.log(`  Asked: ${question.asked_at}`);
   console.log("├─────────────────────────────────────────────────────────────┤");
   console.log(`  ❓ ${question.question}`);
 
@@ -134,10 +134,10 @@ function showQuestion(projectId: string, partialId: string) {
     console.log(`  ${question.answer}`);
   }
 
-  if (question.blocking_task_ids.length > 0) {
+  if (question.blocks_tasks.length > 0) {
     console.log();
     console.log(`  Blocking tasks:`);
-    for (const taskId of question.blocking_task_ids) {
+    for (const taskId of question.blocks_tasks) {
       const task = getTask(taskId);
       if (task) {
         console.log(`    • [${task.status}] ${task.title}`);
