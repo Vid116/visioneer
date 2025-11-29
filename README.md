@@ -1,100 +1,187 @@
 # Visioneer
 
-An AI agent that learns things for you. Give it a goal like "learn chess" or "understand machine learning basics" and it will research, study, and build up knowledge over time.
+An autonomous AI agent that learns and builds for you. Give it a goal like "learn chess", "research blockchain APIs", or "build a working prototype" — and it will research, plan, execute tasks, and create real artifacts.
 
-## Usage
+## Quick Start
 
 ```bash
-# Set a learning goal
-npm run goal "Learn the basics of chess"
+# Set a goal
+npm run goal "Learn the basics of chess openings"
 
-# Run learning cycles
-npm run agent:cycle        # Run one cycle
-npm run agent:continuous   # Keep running until done/blocked
+# Let it run
+npm run agent:continuous
 
-# Watch progress live
+# Watch progress (optional, in another terminal)
 npm run dashboard
 ```
 
-That's it. The agent will research, learn, and store knowledge automatically.
+That's it. The agent researches, learns, writes code, and stores knowledge automatically.
 
-## Watching Progress
+## What It Does
 
-```bash
-# Live dashboard (updates every 2 seconds)
-npm run dashboard
+1. **You set a goal** — anything from learning a topic to building a prototype
+2. **Agent plans tasks** — breaks your goal into concrete steps
+3. **Agent executes** — researches the web, reads articles, writes code/docs
+4. **Knowledge builds up** — facts, insights, and artifacts accumulate
+5. **You watch or intervene** — monitor progress, answer questions if needed
 
-# Static status report
-npm run status
-```
+### Example Goals
 
-The dashboard shows:
-- Current goal and progress
-- Tasks completed / in progress / remaining
-- Recent activity (what the agent is doing)
-- Any questions that need your input
+- `"Learn the basics of chess"` — researches openings, tactics, stores key concepts
+- `"Research blockchain APIs for NFT tracking"` — compares providers, documents findings
+- `"Build a REST API for todo management"` — writes actual working code
+- `"Understand how transformers work in ML"` — studies papers, creates explanations
 
-**Dashboard controls:** `q` quit | `r` refresh | `a` answer questions
-
-## Answering Questions
-
-Sometimes the agent needs your input to continue. Check for questions:
-
-```bash
-npm run answer                     # List open questions
-npm run answer <id> "Your answer"  # Answer a question
-```
-
-## Changing Goals
-
-```bash
-npm run goal "New goal here"   # Set a new goal
-npm run goal                   # Show current goal
-npm run goal --history         # See past goals
-```
-
-## Commands Reference
+## Commands
 
 | Command | What it does |
 |---------|--------------|
-| `npm run dashboard` | Live progress dashboard |
-| `npm run status` | Show current state |
-| `npm run agent:cycle` | Run one learning cycle |
-| `npm run agent:continuous` | Keep running until done/blocked |
 | `npm run goal "..."` | Set a new goal |
-| `npm run answer` | Handle questions |
-| `npm run warnings` | Check for issues |
-| `npm run db:reset` | Start fresh |
+| `npm run goal` | Show current goal |
+| `npm run agent:continuous` | Run until done or blocked |
+| `npm run agent:cycle` | Run one task only |
+| `npm run dashboard` | Live progress view |
+| `npm run status` | Static status report |
+| `npm run answer` | List pending questions |
+| `npm run answer <id> "..."` | Answer a question |
+| `npm run db:reset` | Wipe everything, start fresh |
 
-## How It Works
+## Watching Progress
 
-1. You set a goal
-2. The agent breaks it into tasks
-3. Each `agent:cycle` executes one task (researches, learns, stores knowledge)
-4. Run cycles until your goal is complete
-5. Watch progress via the dashboard
+### Live Dashboard
 
-The agent searches the web, reads articles, and builds up a knowledge base. All learnings are stored and can inform future tasks.
+```bash
+npm run dashboard
+```
+
+Shows real-time updates every 2 seconds:
+- Current goal and phase
+- Progress bar with task counts
+- Recent activity (web searches, tool use, completions)
+- Pending questions that need your input
+
+**Controls:** `q` quit | `r` refresh | `a` answer questions
+
+### Static Status
+
+```bash
+npm run status
+```
+
+One-time snapshot of current state.
+
+## What It Produces
+
+Everything is stored and persists across sessions:
+
+- **Knowledge chunks** — facts, insights, decisions (searchable)
+- **Artifacts** — code files, documents, research notes (in `./artifacts/<project-id>/`)
+- **Task history** — what was planned, executed, completed
+- **Activity log** — timestamped record of all actions
+
+## Answering Questions
+
+Sometimes the agent needs your input to continue:
+
+```bash
+# See what's pending
+npm run answer
+
+# Respond to a question
+npm run answer abc123 "Use PostgreSQL instead of SQLite"
+```
+
+The agent will unblock and continue with your answer.
 
 ## Tips
 
-- Use `npm run agent:continuous` to let it run automatically
-- Or run `npm run agent:cycle` multiple times manually
-- Check `npm run dashboard` to watch what's happening
-- Answer questions promptly to unblock tasks
-- Each cycle costs ~$0.10-0.20 in API calls
-- Use `npm run db:reset` to start completely fresh
+- **Let it run** — `npm run agent:continuous` handles everything automatically
+- **Watch the dashboard** — see what it's researching and building in real-time
+- **Answer quickly** — blocked tasks wait for your input
+- **Check artifacts** — look in `./artifacts/` for generated code and docs
+- **Cost awareness** — each cycle uses ~$0.10-0.20 in API calls
+- **Fresh start** — `npm run db:reset` wipes everything if needed
 
-## Setup (first time only)
+## Setup
 
-If setting up on a new machine:
+### Prerequisites
+
+- Node.js 18+
+- npm
+
+### Installation
 
 ```bash
+git clone <repo>
+cd visioneer
 npm install
-cp .env.example .env   # Then add your API keys
+```
+
+### API Keys
+
+Copy the example and add your keys:
+
+```bash
+cp .env.example .env
+```
+
+Required keys in `.env`:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...    # Claude - the reasoning engine
+OPENAI_API_KEY=sk-...           # Embeddings for semantic search
+SERPER_API_KEY=...              # Web search (get free key at serper.dev)
+```
+
+### Initialize
+
+```bash
 npm run db:init
 ```
 
-## For Developers
+### Verify
 
-See [HANDOFF.md](./HANDOFF.md) for technical architecture and roadmap.
+```bash
+npm run status
+```
+
+You should see "No active project" — ready to set your first goal!
+
+## How It Works (Technical)
+
+Visioneer uses a three-layer architecture:
+
+1. **Command Layer** — interprets your goals, reports progress
+2. **Vision Layer** — maintains strategic coherence, plans tasks
+3. **Execution Layer** — does the work (research, writing, building)
+
+Supported by a **Memory System**:
+- **Orientation** — compressed project context (always loaded)
+- **Working Memory** — active tasks, questions, blockers
+- **Knowledge Store** — semantic search over all learned content
+
+The agent can use tools:
+- `web_search` — find information online
+- `web_fetch` — read full articles/documentation  
+- `write_artifact` — create code files, documents
+- `read_artifact` — reference previously created files
+
+See [HANDOFF.md](./HANDOFF.md) for full technical details.
+
+## Project Structure
+
+```
+visioneer/
+├── src/
+│   ├── agent/       # Core agent logic (cycle, execution, planning)
+│   ├── cli/         # Command-line tools (dashboard, goal, status)
+│   ├── db/          # SQLite + vector store
+│   └── embedding/   # OpenAI embeddings integration
+├── artifacts/       # Generated files (code, docs) by project
+├── visioneer.db     # All persistent data
+└── visioneer.config.json  # Settings
+```
+
+## License
+
+MIT
