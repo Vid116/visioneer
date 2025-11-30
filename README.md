@@ -2,6 +2,30 @@
 
 An autonomous AI agent that learns and builds for you. Give it a goal like "learn chess", "research blockchain APIs", or "build a working prototype" — and it will research, plan, execute tasks, and create real artifacts.
 
+# Visioneer - Autonomous AI Agent Architecture
+
+## What This Is
+An autonomous AI agent system designed for long-running learning and execution projects. Takes high-level directives ("learn piano", "build a product") and executes them over days/weeks/months.
+
+## Core Architecture
+- Three-layer agents: Command (human interface) → Vision (strategic) → Execution (operational)
+- Three-tier memory: Orientation (fast context) → Working (active state) → Knowledge (deep storage)
+- "Human-triggered, memory-persistent" operation model via Claude Code
+
+## Key Files
+- visioneer-technical-specification.md - Complete implementation spec
+- visioneer.config.json - System configuration
+- src/agent/cycle.ts - Agent loop implementation
+
+## Current State
+Architecture designed and documented. Basic agent cycle exists. MCP servers for memory system need implementation.
+
+## Tech Stack
+TypeScript, SQLite + sqlite-vss (vector search), MCP servers, Claude API
+
+## Location
+C:/Visioneer/visioneer/
+
 ## Quick Start
 
 ```bash
@@ -68,7 +92,17 @@ Shows real-time updates every 2 seconds:
 npm run status
 ```
 
-One-time snapshot of current state.
+One-time snapshot showing:
+- **Project** — ID, creation date, vision, current phase
+- **Current Goal** — what the agent is working toward
+- **Progress** — completion status by area with progress bars
+- **Active Priorities** — what's being focused on
+- **Tasks** — counts by status (ready, in progress, blocked, done)
+- **Open Questions** — items needing your input
+- **Recent Activity** — last 5 actions taken
+- **Knowledge** — chunk counts by confidence level, recent learnings
+- **Last Cycle** — when it ran, what was completed, tools used
+- **Quick Actions** — common commands to run next
 
 ## What It Produces
 
@@ -181,6 +215,23 @@ visioneer/
 ├── visioneer.db     # All persistent data
 └── visioneer.config.json  # Settings
 ```
+
+## Related Projects
+
+### PixelIRL
+
+An NFT-powered LED pixel display for bars and venues. Research and planning completed by Visioneer.
+
+**Location:** `C:\Visioneer\pixelirl\`
+
+**What it is:** A physical 8x8 LED matrix where each pixel can be owned and controlled via NFT. Installed in venues for zero cost, creates Instagram-worthy experiences.
+
+**Status:** Research complete, hardware parts ordered, ready for build.
+
+**Key docs:**
+- `docs/guides/pixelirl-build-guide.html` — Complete assembly with buy links
+- `docs/pixelirl-presentation.html` — Investor presentation
+- `docs/pixelirl-executive-summary.md` — One-page overview
 
 ## License
 
