@@ -1,5 +1,8 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 
 /**
  * Mock ESP32 Server for Testing HTTP Communication
@@ -35,21 +38,31 @@ class MockESP32Server {
   setupMiddleware() {
     this.app.use(cors());
     this.app.use(express.json({ limit: '10mb' }));
-    
+
+    // Serve static files (visualizer) - FIRST, before any other middleware
+    const publicPath = path.join(__dirname, 'public');
+    console.log('Serving static files from:', publicPath);
+    this.app.use(express.static(publicPath));
+
+    // Serve visualizer at root
+    this.app.get('/', (req, res) => {
+      res.sendFile(path.join(publicPath, 'visualizer.html'));
+    });
+
     // Logging middleware
     this.app.use((req, res, next) => {
       console.log(`Mock ESP32 - ${new Date().toISOString()} - ${req.method} ${req.path}`);
       next();
     });
 
-    // Simulate occasional network issues for testing retry logic
-    this.app.use((req, res, next) => {
+    // Simulate occasional network issues for testing retry logic (API routes only)
+    this.app.use('/api', (req, res, next) => {
       // 5% chance of simulating network error
       if (Math.random() < 0.05) {
         console.log('Mock ESP32 - Simulating network error');
         return res.status(503).json({ error: 'Service temporarily unavailable' });
       }
-      
+
       // 3% chance of timeout (delay response)
       if (Math.random() < 0.03) {
         console.log('Mock ESP32 - Simulating slow response');
@@ -87,21 +100,38 @@ class MockESP32Server {
       });
     });
 
-    // Single tile color update
+    // Single tile color update (supports both x,y and tileId formats)
     this.app.post('/api/tile/color', (req, res) => {
       try {
-        const { tileId, red, green, blue, timestamp } = req.body;
-        
+        // Support both formats: {x, y, r, g, b} and {tileId, red, green, blue}
+        let tileId, r, g, b;
+
+        if (req.body.x !== undefined && req.body.y !== undefined) {
+          // x, y format from nft-event-processor
+          const x = req.body.x;
+          const y = req.body.y;
+          tileId = y * 10 + x; // Convert x,y to tileId (10x10 grid)
+          r = req.body.r;
+          g = req.body.g;
+          b = req.body.b;
+        } else {
+          // tileId format
+          tileId = req.body.tileId;
+          r = req.body.red;
+          g = req.body.green;
+          b = req.body.blue;
+        }
+
         // Validate input
         if (typeof tileId !== 'number' || tileId < 0 || tileId >= this.ledState.totalTiles) {
-          return res.status(400).json({ 
-            error: 'Invalid tileId',
+          return res.status(400).json({
+            error: 'Invalid tileId or x,y coordinates',
             validRange: `0-${this.ledState.totalTiles - 1}`
           });
         }
 
-        if (!this.isValidColorValue(red) || !this.isValidColorValue(green) || !this.isValidColorValue(blue)) {
-          return res.status(400).json({ 
+        if (!this.isValidColorValue(r) || !this.isValidColorValue(g) || !this.isValidColorValue(b)) {
+          return res.status(400).json({
             error: 'Invalid color values',
             message: 'r, g, b values must be integers between 0 and 255'
           });
@@ -110,18 +140,18 @@ class MockESP32Server {
         // Update tile state
         this.ledState.tiles[tileId] = {
           id: tileId,
-          r: red,
-          g: green,
-          b: blue,
+          r: r,
+          g: g,
+          b: b,
           lastUpdate: new Date().toISOString()
         };
 
-        console.log(`Mock ESP32 - Updated tile ${tileId} to RGB(${red}, ${green}, ${blue})`);
+        console.log(`Mock ESP32 - Updated tile ${tileId} to RGB(${r}, ${g}, ${b})`);
 
         res.json({
           success: true,
           tileId,
-          color: { r: red, g: green, b: blue },
+          color: { r, g, b },
           timestamp: new Date().toISOString()
         });
 

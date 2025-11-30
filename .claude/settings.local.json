@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"C:\\Visioneer\\visioneer\\artifacts\" /s /b)",
+      "Bash(sqlite3:*)",
+      "Bash(npm run status:*)",
+      "Bash(powershell:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

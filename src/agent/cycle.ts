@@ -460,7 +460,8 @@ async function runCycle(): Promise<void> {
   initializeSchema();
 
   // Get project ID from args (skip --continuous flag)
-  let projectId = process.argv.find((arg) => !arg.startsWith("--") && !arg.includes("cycle.ts") && !arg.includes("tsx"));
+  // Skip args[0] (node path) and args[1] (tsx), start from args[2]
+  let projectId = process.argv.slice(2).find((arg) => !arg.startsWith("--") && !arg.includes("cycle.ts") && !arg.includes("tsx"));
 
   if (!projectId) {
     const projects = listProjects();
@@ -526,8 +527,9 @@ const continuous = process.argv.includes("--continuous");
 initializeSchema();
 
 // Get project ID from args (skip flags and script path)
-let projectId = process.argv.find(
-  (arg) => !arg.startsWith("--") && !arg.includes("cycle.ts") && !arg.includes("tsx") && !arg.includes("node")
+// Skip args[0] (node path) and args[1] (tsx), start from args[2]
+let projectId = process.argv.slice(2).find(
+  (arg) => !arg.startsWith("--") && !arg.includes("cycle.ts") && !arg.includes("tsx")
 );
 
 if (!projectId) {

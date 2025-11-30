@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  # Redis for caching grid state and event history
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Mock ESP32 server (simulates hardware)
+  mock-esp32:
+    build: .
+    command: node mock-esp32-server.js
+    ports:
+      - "3001:3001"
+    environment:
+      - MOCK_ESP32_PORT=3001
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # NFT Event Processor (main backend)
+  nft-processor:
+    build: .
+    command: node nft-event-processor.js
+    ports:
+      - "3000:3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      mock-esp32:
+        condition: service_healthy
+    environment:
+      - PORT=3000
+      - NODE_ENV=development
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - ESP32_BASE_URL=http://mock-esp32:3001
+      - ALCHEMY_SIGNING_KEY=${ALCHEMY_SIGNING_KEY:-test_signing_key}
+
+volumes:
+  redis-data:

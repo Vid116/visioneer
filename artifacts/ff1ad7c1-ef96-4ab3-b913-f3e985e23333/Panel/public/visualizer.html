@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NFT LED Grid Visualizer</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      min-height: 100vh;
+      color: #fff;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+
+    header h1 {
+      font-size: 2.5rem;
+      margin-bottom: 10px;
+      background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .status-bar {
+      display: flex;
+      justify-content: center;
+      gap: 30px;
+      margin-bottom: 20px;
+    }
+
+    .wallet-section {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 20px;
+    }
+
+    .btn-wallet {
+      background: linear-gradient(135deg, #f6851b, #e2761b);
+      color: white;
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn-wallet:hover {
+      transform: translateY(-2px);
+    }
+
+    .btn-wallet.connected {
+      background: linear-gradient(135deg, #00ff88, #00cc66);
+    }
+
+    .wallet-address {
+      font-family: monospace;
+      font-size: 0.85rem;
+    }
+
+    .owned-indicator {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 8px;
+      height: 8px;
+      background: #00ff88;
+      border-radius: 50%;
+      display: none;
+    }
+
+    .led-tile.owned .owned-indicator {
+      display: block;
+    }
+
+    .color-modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+
+    .color-modal.active {
+      display: flex;
+    }
+
+    .color-picker-container {
+      background: rgba(30, 30, 50, 0.95);
+      padding: 30px;
+      border-radius: 15px;
+      text-align: center;
+    }
+
+    .color-picker-container h3 {
+      margin-bottom: 20px;
+      color: #00d4ff;
+    }
+
+    .color-input {
+      width: 100px;
+      height: 100px;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      margin-bottom: 20px;
+    }
+
+    .color-buttons {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+    }
+
+    .btn-apply {
+      background: linear-gradient(135deg, #00ff88, #00cc66);
+      color: #333;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .btn-cancel {
+      background: linear-gradient(135deg, #666, #444);
+      color: white;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .not-owner-msg {
+      color: #ff6b6b;
+      font-size: 0.9rem;
+      margin-top: 10px;
+    }
+
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+
+    .status-dot.connected {
+      background: #00ff88;
+      box-shadow: 0 0 10px #00ff88;
+    }
+
+    .status-dot.disconnected {
+      background: #ff4444;
+      box-shadow: 0 0 10px #ff4444;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .main-content {
+      display: grid;
+      grid-template-columns: 1fr 350px;
+      gap: 30px;
+    }
+
+    @media (max-width: 900px) {
+      .main-content {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .grid-container {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 20px;
+      padding: 30px;
+      backdrop-filter: blur(10px);
+    }
+
+    .led-grid {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 8px;
+      max-width: 500px;
+      margin: 0 auto;
+    }
+
+    .led-tile {
+      aspect-ratio: 1;
+      background: #222;
+      border-radius: 8px;
+      transition: all 0.3s ease;
+      cursor: pointer;
+      position: relative;
+      box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.5);
+    }
+
+    .led-tile:hover {
+      transform: scale(1.05);
+    }
+
+    .led-tile.active {
+      animation: glow 0.5s ease-out;
+    }
+
+    @keyframes glow {
+      0% { transform: scale(1.2); filter: brightness(1.5); }
+      100% { transform: scale(1); filter: brightness(1); }
+    }
+
+    .led-tile .coords {
+      position: absolute;
+      bottom: 2px;
+      right: 4px;
+      font-size: 8px;
+      opacity: 0.5;
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .panel {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 15px;
+      padding: 20px;
+      backdrop-filter: blur(10px);
+    }
+
+    .panel h3 {
+      margin-bottom: 15px;
+      font-size: 1.1rem;
+      color: #00d4ff;
+    }
+
+    .legend {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .legend-color {
+      width: 24px;
+      height: 24px;
+      border-radius: 4px;
+    }
+
+    .legend-color.transfer { background: rgb(0, 100, 255); }
+    .legend-color.sale { background: rgb(255, 215, 0); }
+    .legend-color.mint { background: rgb(255, 255, 255); }
+
+    .event-log {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .event-item {
+      padding: 10px;
+      margin-bottom: 8px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 8px;
+      font-size: 0.85rem;
+      border-left: 3px solid #00d4ff;
+    }
+
+    .event-item.transfer { border-left-color: rgb(0, 100, 255); }
+    .event-item.sale { border-left-color: rgb(255, 215, 0); }
+    .event-item.mint { border-left-color: rgb(255, 255, 255); }
+
+    .event-time {
+      font-size: 0.75rem;
+      color: #888;
+      margin-bottom: 4px;
+    }
+
+    .controls {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    button {
+      padding: 12px 20px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 600;
+      transition: all 0.2s ease;
+    }
+
+    button:hover {
+      transform: translateY(-2px);
+    }
+
+    .btn-transfer {
+      background: linear-gradient(135deg, #0066ff, #0044aa);
+      color: white;
+    }
+
+    .btn-sale {
+      background: linear-gradient(135deg, #ffd700, #ffaa00);
+      color: #333;
+    }
+
+    .btn-mint {
+      background: linear-gradient(135deg, #ffffff, #cccccc);
+      color: #333;
+    }
+
+    .btn-reset {
+      background: linear-gradient(135deg, #ff4444, #cc0000);
+      color: white;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      text-align: center;
+    }
+
+    .stat-item {
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 8px;
+    }
+
+    .stat-value {
+      font-size: 1.5rem;
+      font-weight: bold;
+    }
+
+    .stat-label {
+      font-size: 0.75rem;
+      color: #888;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>NFT LED Grid Visualizer</h1>
+      <div class="status-bar">
+        <div class="status-item">
+          <div id="esp32-status" class="status-dot disconnected"></div>
+          <span>ESP32 Mock</span>
+        </div>
+        <div class="status-item">
+          <div id="processor-status" class="status-dot disconnected"></div>
+          <span>NFT Processor</span>
+        </div>
+      </div>
+      <div class="wallet-section">
+        <button id="wallet-btn" class="btn-wallet" onclick="connectWallet()">
+          Connect Wallet
+        </button>
+      </div>
+    </header>
+
+    <!-- Color Picker Modal -->
+    <div id="color-modal" class="color-modal">
+      <div class="color-picker-container">
+        <h3>Change Tile Color (<span id="modal-coords"></span>)</h3>
+        <input type="color" id="color-input" class="color-input" value="#00ff88">
+        <div class="color-buttons">
+          <button class="btn-apply" onclick="applyColor()">Apply</button>
+          <button class="btn-cancel" onclick="closeColorModal()">Cancel</button>
+        </div>
+        <div id="not-owner-msg" class="not-owner-msg" style="display: none;">
+          You don't own this tile
+        </div>
+      </div>
+    </div>
+
+    <div class="main-content">
+      <div class="grid-container">
+        <div id="led-grid" class="led-grid">
+          <!-- Grid tiles will be generated by JavaScript -->
+        </div>
+      </div>
+
+      <div class="sidebar">
+        <div class="panel">
+          <h3>Color Legend</h3>
+          <div class="legend">
+            <div class="legend-item">
+              <div class="legend-color transfer"></div>
+              <span>Transfer</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color sale"></div>
+              <span>Sale</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color mint"></div>
+              <span>Mint</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Statistics</h3>
+          <div class="stats">
+            <div class="stat-item">
+              <div class="stat-value" id="transfer-count">0</div>
+              <div class="stat-label">Transfers</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-value" id="sale-count">0</div>
+              <div class="stat-label">Sales</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-value" id="mint-count">0</div>
+              <div class="stat-label">Mints</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Test Controls</h3>
+          <div class="controls">
+            <button class="btn-transfer" onclick="simulateEvent('transfer')">Simulate Transfer</button>
+            <button class="btn-sale" onclick="simulateEvent('sale')">Simulate Sale</button>
+            <button class="btn-mint" onclick="simulateEvent('mint')">Simulate Mint</button>
+            <button class="btn-reset" onclick="resetGrid()">Reset Grid</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Event Log</h3>
+          <div id="event-log" class="event-log">
+            <div class="event-item">
+              <div class="event-time">Waiting for events...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const MOCK_ESP32_URL = 'http://localhost:3001';
+    const PROCESSOR_URL = 'http://localhost:3000';
+    const GRID_SIZE = 8;
+
+    let eventStats = { transfer: 0, sale: 0, mint: 0 };
+    let previousTileStates = {};
+
+    // Initialize grid
+    function initGrid() {
+      const grid = document.getElementById('led-grid');
+      grid.innerHTML = '';
+
+      for (let y = 0; y < GRID_SIZE; y++) {
+        for (let x = 0; x < GRID_SIZE; x++) {
+          const tile = document.createElement('div');
+          tile.className = 'led-tile';
+          tile.id = `tile-${x}-${y}`;
+          tile.dataset.x = x;
+          tile.dataset.y = y;
+          tile.innerHTML = `<div class="owned-indicator"></div><span class="coords">${x},${y}</span>`;
+          tile.style.background = 'rgb(20, 20, 20)';
+          tile.onclick = () => handleTileClick(x, y);
+          grid.appendChild(tile);
+        }
+      }
+    }
+
+    // Fetch grid state from mock ESP32
+    async function fetchGridState() {
+      try {
+        const response = await fetch(`${MOCK_ESP32_URL}/api/tiles`);
+        if (!response.ok) throw new Error('Failed to fetch');
+
+        document.getElementById('esp32-status').className = 'status-dot connected';
+
+        const data = await response.json();
+        updateGridDisplay(data.tiles);
+      } catch (error) {
+        document.getElementById('esp32-status').className = 'status-dot disconnected';
+        console.error('ESP32 connection error:', error);
+      }
+    }
+
+    // Check processor health
+    async function checkProcessorHealth() {
+      try {
+        const response = await fetch(`${PROCESSOR_URL}/grid/status`);
+        if (response.ok) {
+          document.getElementById('processor-status').className = 'status-dot connected';
+        } else {
+          throw new Error('Not healthy');
+        }
+      } catch (error) {
+        document.getElementById('processor-status').className = 'status-dot disconnected';
+      }
+    }
+
+    // Update grid display
+    function updateGridDisplay(tiles) {
+      tiles.forEach((tile, index) => {
+        const x = index % 10;
+        const y = Math.floor(index / 10);
+
+        if (x < GRID_SIZE && y < GRID_SIZE) {
+          const tileElement = document.getElementById(`tile-${x}-${y}`);
+          if (tileElement) {
+            const { r, g, b } = tile;
+            const newColor = `rgb(${r}, ${g}, ${b})`;
+            const tileKey = `${x}-${y}`;
+
+            // Check if color changed
+            if (previousTileStates[tileKey] !== newColor) {
+              tileElement.style.background = newColor;
+              tileElement.style.boxShadow = r + g + b > 50
+                ? `0 0 15px rgba(${r}, ${g}, ${b}, 0.6), inset 0 0 10px rgba(0,0,0,0.3)`
+                : 'inset 0 0 10px rgba(0, 0, 0, 0.5)';
+
+              // Trigger animation if it's a new update
+              if (previousTileStates[tileKey] !== undefined) {
+                tileElement.classList.add('active');
+                setTimeout(() => tileElement.classList.remove('active'), 500);
+
+                // Detect event type and log
+                if (r === 0 && g === 100 && b === 255) {
+                  logEvent('transfer', x, y);
+                } else if (r === 255 && g === 215 && b === 0) {
+                  logEvent('sale', x, y);
+                } else if (r === 255 && g === 255 && b === 255) {
+                  logEvent('mint', x, y);
+                }
+              }
+
+              previousTileStates[tileKey] = newColor;
+            }
+          }
+        }
+      });
+    }
+
+    // Log event to UI
+    function logEvent(type, x, y) {
+      eventStats[type]++;
+      updateStats();
+
+      const log = document.getElementById('event-log');
+      const time = new Date().toLocaleTimeString();
+
+      const entry = document.createElement('div');
+      entry.className = `event-item ${type}`;
+      entry.innerHTML = `
+        <div class="event-time">${time}</div>
+        <div>${type.toUpperCase()} at tile (${x}, ${y})</div>
+      `;
+
+      log.insertBefore(entry, log.firstChild);
+
+      // Keep only last 50 events
+      while (log.children.length > 50) {
+        log.removeChild(log.lastChild);
+      }
+    }
+
+    // Update statistics
+    function updateStats() {
+      document.getElementById('transfer-count').textContent = eventStats.transfer;
+      document.getElementById('sale-count').textContent = eventStats.sale;
+      document.getElementById('mint-count').textContent = eventStats.mint;
+    }
+
+    // Simulate event (calls webhook simulator endpoint or direct ESP32)
+    async function simulateEvent(type) {
+      const x = Math.floor(Math.random() * GRID_SIZE);
+      const y = Math.floor(Math.random() * GRID_SIZE);
+
+      let color;
+      switch (type) {
+        case 'transfer': color = { r: 0, g: 100, b: 255 }; break;
+        case 'sale': color = { r: 255, g: 215, b: 0 }; break;
+        case 'mint': color = { r: 255, g: 255, b: 255 }; break;
+      }
+
+      try {
+        await fetch(`${MOCK_ESP32_URL}/api/tile/color`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ x, y, ...color })
+        });
+      } catch (error) {
+        console.error('Failed to simulate event:', error);
+      }
+    }
+
+    // Reset grid
+    async function resetGrid() {
+      try {
+        await fetch(`${MOCK_ESP32_URL}/api/reset`, { method: 'POST' });
+        eventStats = { transfer: 0, sale: 0, mint: 0 };
+        updateStats();
+        document.getElementById('event-log').innerHTML = '<div class="event-item"><div class="event-time">Grid reset</div></div>';
+      } catch (error) {
+        console.error('Failed to reset grid:', error);
+      }
+    }
+
+    // ===== WALLET & OWNERSHIP INTEGRATION =====
+    const AUTH_URL = 'http://localhost:3002'; // Ownership verification backend
+    const CONTRACT_ADDRESS = '0xeE3474805Bc1A0Cdc13B1A758D1e35F057BA6AFD';
+
+    let walletAddress = null;
+    let authToken = null;
+    let ownedTiles = []; // Array of {tileId, x, y}
+    let selectedTile = null;
+
+    // Connect MetaMask wallet
+    async function connectWallet() {
+      if (!window.ethereum) {
+        alert('Please install MetaMask to use this feature');
+        return;
+      }
+
+      try {
+        // Request account access
+        const accounts = await window.ethereum.request({
+          method: 'eth_requestAccounts'
+        });
+        walletAddress = accounts[0];
+
+        // Sign message for authentication
+        const nonce = generateNonce();
+        const message = `Sign this message to authenticate with LED Board\n\nNonce: ${nonce}\nTimestamp: ${Date.now()}`;
+
+        const signature = await window.ethereum.request({
+          method: 'personal_sign',
+          params: [message, walletAddress]
+        });
+
+        // Verify with backend and get JWT
+        const authResponse = await fetch(`${AUTH_URL}/api/auth/verify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address: walletAddress, signature, message, nonce })
+        });
+
+        if (authResponse.ok) {
+          const authData = await authResponse.json();
+          authToken = authData.token;
+          ownedTiles = authData.tiles || [];
+
+          // Update UI
+          updateWalletButton();
+          highlightOwnedTiles();
+
+          console.log('Authenticated! Owned tiles:', ownedTiles);
+        } else {
+          throw new Error('Authentication failed');
+        }
+
+      } catch (error) {
+        console.error('Wallet connection error:', error);
+        alert('Failed to connect wallet: ' + error.message);
+      }
+    }
+
+    function generateNonce() {
+      return Array.from(crypto.getRandomValues(new Uint8Array(32)))
+        .map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function updateWalletButton() {
+      const btn = document.getElementById('wallet-btn');
+      if (walletAddress) {
+        const shortAddr = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
+        btn.innerHTML = `<span class="wallet-address">${shortAddr}</span>`;
+        btn.classList.add('connected');
+      }
+    }
+
+    function highlightOwnedTiles() {
+      // Remove all owned classes first
+      document.querySelectorAll('.led-tile').forEach(t => t.classList.remove('owned'));
+
+      // Add owned class to tiles we own
+      ownedTiles.forEach(tile => {
+        const tileElement = document.getElementById(`tile-${tile.x}-${tile.y}`);
+        if (tileElement) {
+          tileElement.classList.add('owned');
+        }
+      });
+    }
+
+    function handleTileClick(x, y) {
+      if (!walletAddress) {
+        alert('Please connect your wallet first');
+        return;
+      }
+
+      selectedTile = { x, y };
+      const isOwned = ownedTiles.some(t => t.x === x && t.y === y);
+
+      document.getElementById('modal-coords').textContent = `${x}, ${y}`;
+      document.getElementById('not-owner-msg').style.display = isOwned ? 'none' : 'block';
+      document.querySelector('.btn-apply').style.display = isOwned ? 'block' : 'none';
+      document.getElementById('color-modal').classList.add('active');
+    }
+
+    function closeColorModal() {
+      document.getElementById('color-modal').classList.remove('active');
+      selectedTile = null;
+    }
+
+    async function applyColor() {
+      if (!selectedTile || !authToken) return;
+
+      const colorInput = document.getElementById('color-input').value;
+      const r = parseInt(colorInput.slice(1, 3), 16);
+      const g = parseInt(colorInput.slice(3, 5), 16);
+      const b = parseInt(colorInput.slice(5, 7), 16);
+
+      try {
+        // Send to ownership verification backend
+        const response = await fetch(`${AUTH_URL}/api/protected/tile/color`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${authToken}`
+          },
+          body: JSON.stringify({
+            x: selectedTile.x,
+            y: selectedTile.y,
+            r, g, b
+          })
+        });
+
+        if (response.ok) {
+          // Also update ESP32 directly for immediate visual feedback
+          await fetch(`${MOCK_ESP32_URL}/api/tile/color`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ x: selectedTile.x, y: selectedTile.y, r, g, b })
+          });
+
+          closeColorModal();
+          console.log(`Tile (${selectedTile.x}, ${selectedTile.y}) color updated to rgb(${r}, ${g}, ${b})`);
+        } else {
+          const error = await response.json();
+          alert(error.error || 'Failed to update color');
+        }
+      } catch (error) {
+        console.error('Color update error:', error);
+        alert('Failed to update color: ' + error.message);
+      }
+    }
+
+    // Close modal on outside click
+    document.getElementById('color-modal').addEventListener('click', (e) => {
+      if (e.target.id === 'color-modal') closeColorModal();
+    });
+
+    // Handle account changes
+    if (window.ethereum) {
+      window.ethereum.on('accountsChanged', (accounts) => {
+        if (accounts.length === 0) {
+          walletAddress = null;
+          authToken = null;
+          ownedTiles = [];
+          document.getElementById('wallet-btn').innerHTML = 'Connect Wallet';
+          document.getElementById('wallet-btn').classList.remove('connected');
+          highlightOwnedTiles();
+        } else {
+          connectWallet();
+        }
+      });
+    }
+
+    // Initialize
+    initGrid();
+    fetchGridState();
+    checkProcessorHealth();
+
+    // Poll for updates
+    setInterval(fetchGridState, 500);
+    setInterval(checkProcessorHealth, 5000);
+  </script>
+</body>
+</html>

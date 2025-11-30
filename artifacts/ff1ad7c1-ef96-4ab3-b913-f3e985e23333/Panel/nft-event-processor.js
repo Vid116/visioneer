@@ -1,7 +1,19 @@
+require('dotenv').config();
+
 const express = require('express');
 const redis = require('redis');
 const axios = require('axios');
+const axiosRetry = require('axios-retry').default;
 const crypto = require('crypto');
+
+// Configure axios retry
+axiosRetry(axios, {
+  retries: 3,
+  retryDelay: axiosRetry.exponentialDelay,
+  retryCondition: (error) => {
+    return axiosRetry.isNetworkOrIdempotentRequestError(error) || error.code === 'ECONNABORTED';
+  }
+});
 
 class NFTEventProcessor {
   constructor() {
@@ -21,12 +33,19 @@ class NFTEventProcessor {
   }
 
   async init() {
-    // Initialize Redis connection
+    // Initialize Redis connection (Redis v4 syntax)
+    const redisHost = process.env.REDIS_HOST || 'localhost';
+    const redisPort = process.env.REDIS_PORT || 6379;
+
     this.redisClient = redis.createClient({
-      host: process.env.REDIS_HOST || 'localhost',
-      port: process.env.REDIS_PORT || 6379,
-      retry_strategy: (times) => Math.min(times * 50, 2000)
+      url: `redis://${redisHost}:${redisPort}`,
+      socket: {
+        reconnectStrategy: (retries) => Math.min(retries * 50, 2000)
+      }
     });
+
+    this.redisClient.on('error', (err) => console.error('Redis Client Error:', err));
+    this.redisClient.on('connect', () => console.log('Connected to Redis'));
 
     await this.redisClient.connect();
     
@@ -94,7 +113,8 @@ class NFTEventProcessor {
       console.log(`Processing NFT activity webhook: ${id}`);
       
       // Process each activity in the event
-      for (const activity of event.activity) {
+      const activities = Array.isArray(event.activity) ? event.activity : [];
+      for (const activity of activities) {
         await this.processNFTEvent(activity, event.network);
       }
 
@@ -211,16 +231,14 @@ class NFTEventProcessor {
   // Send color update to ESP32 via HTTP
   async sendColorToESP32(x, y, color) {
     try {
-      const response = await axios.post(`${this.esp32BaseUrl}/color`, {
+      const response = await axios.post(`${this.esp32BaseUrl}/api/tile/color`, {
         x,
         y,
         r: color.r,
         g: color.g,
         b: color.b
       }, {
-        timeout: 5000,
-        retries: 3,
-        retryDelay: 1000
+        timeout: 5000
       });
       
       console.log(`Color sent to ESP32 for tile (${x},${y}):`, response.status);
