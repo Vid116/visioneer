@@ -20,9 +20,48 @@ All core phases complete and **proven working** with real Claude Agent SDK execu
 | 8. Continuous Mode | Done | `npm run agent:continuous` runs until complete/blocked |
 | 9. Memory Research | Done | Comprehensive research on improving memory system |
 
-## Recent Session (2024-12-01)
+## Recent Sessions
 
-### What Was Done
+### Session 2024-12-01 (Latest) - Phase 1 Memory Prep
+
+**Focus:** Preparing for Phase 1 memory system improvements
+
+#### What Was Done
+
+1. **Complete Codebase Analysis for Memory Improvements**
+   - Documented all key files and their roles in memory system
+   - Mapped embedding generation flow: `embed()` → `storeChunk()` → `storeVectorEmbedding()`
+   - Identified all modification points for Phase 1 improvements
+
+2. **Key Technical Findings**
+   - **Embedding trigger:** Caller generates via `embed()` then passes to `storeChunk()` (execution.ts:561-588)
+   - **DB connection:** Singleton pattern with statement caching (connection.ts)
+   - **SDK parsing:** Streams messages, extracts JSON from markdown code blocks (executor.ts:263-353)
+   - **No migrations:** Schema uses `IF NOT EXISTS` - need ALTER TABLE for new columns
+   - **Tests:** Vitest + E2E tests with mock executors
+
+3. **Phase 1 Implementation Plan Ready**
+   - Entry points identified for BM25, decay, persistence scoring
+   - Schema changes needed: add `strength`, `persistence_score`, `last_decay` to chunks
+   - Hybrid retrieval modification point: `retrieval/planner.ts:executeHybridQuery()`
+
+#### Key Entry Points for Memory Improvements
+
+| What to Modify | File | Function/Location |
+|----------------|------|-------------------|
+| Add BM25 search | `src/db/queries.ts` | Add `searchBM25()` alongside `searchSemantic()` |
+| Hybrid retrieval | `src/retrieval/planner.ts:466-539` | Modify `executeHybridQuery()` |
+| Memory decay | `src/db/queries.ts` | Add `decayChunkStrength()` function |
+| Persistence scoring | `src/db/queries.ts:541-581` | Modify `storeChunk()` to calculate score |
+| Chunk schema changes | `src/db/schema.sql:88-104` | Add `strength`, `persistence_score` columns |
+| Re-ranking | `src/retrieval/planner.ts` | Add cross-encoder after semantic search |
+| Contextual headers | `src/embedding/index.ts` | Modify `embed()` to prepend context |
+
+---
+
+### Session 2024-12-01 (Earlier) - Bug Fixes & Docs
+
+#### What Was Done
 
 1. **Fixed Continuous Mode Exit Bug**
    - Problem: Agent stopped when all tasks done but `progress_snapshot` showed incomplete areas
@@ -272,6 +311,37 @@ Only OpenAI supported. Voyage and Ollama providers are stubbed but not implement
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Next Steps: Phase 1 Memory Improvements
+
+**Ready to implement.** All research complete, entry points identified.
+
+### Implementation Order (Recommended)
+
+1. **Schema Changes** (do first)
+   ```sql
+   ALTER TABLE chunks ADD COLUMN strength REAL DEFAULT 1.0;
+   ALTER TABLE chunks ADD COLUMN persistence_score REAL;
+   ALTER TABLE chunks ADD COLUMN last_decay TIMESTAMP;
+   ```
+
+2. **BM25 Keyword Search** (~3 days)
+   - Add `searchBM25()` in `queries.ts`
+   - Implement term frequency / inverse document frequency
+   - Or use SQLite FTS5 for built-in support
+
+3. **Hybrid Retrieval** (~1 day after BM25)
+   - Modify `executeHybridQuery()` in `retrieval/planner.ts`
+   - Implement RRF: `score = 1/(60 + semantic_rank) + 1/(60 + bm25_rank)`
+
+4. **Persistence Scoring** (~2 days)
+   - Modify `storeChunk()` to calculate: `PS = 0.25F + 0.20E + 0.25C + 0.15R + 0.15I`
+   - F=fundamentality, E=expertise, C=connectivity, R=recency, I=importance
+
+5. **Memory Decay** (~2 days)
+   - Add `decayChunkStrength()` function
+   - Formula: `S(t) = S0 × e^(-0.05t)` (14-day half-life)
+   - Run as background job or on access
+
 ## Roadmap / Backlog
 
 | Item | Status | Notes |
@@ -279,9 +349,12 @@ Only OpenAI supported. Voyage and Ollama providers are stubbed but not implement
 | Continuous mode | Done | `npm run agent:continuous` |
 | Memory research | Done | Recommendations in artifacts |
 | Architecture docs | Done | `docs/ARCHITECTURE.md` |
-| BM25 hybrid search | Planned | +20-30% retrieval improvement |
-| Memory decay | Planned | Prevent infinite growth |
-| Persistence scoring | Planned | Smart retention decisions |
+| Phase 1 prep | Done | Entry points identified, ready to implement |
+| BM25 hybrid search | **Next** | +20-30% retrieval improvement |
+| Persistence scoring | **Next** | Smart retention decisions |
+| Memory decay | **Next** | Prevent infinite growth |
+| Cross-encoder re-ranking | Planned | +15-30% accuracy |
+| Contextual chunk headers | Planned | +35-49% retrieval |
 | Web oversight UI | Planned | Browser-based dashboard |
 | Knowledge graph viz | Planned | Visualize chunk relationships |
 | Multi-project support | Planned | Currently single project |
@@ -306,4 +379,4 @@ Without subscription (API credits):
 
 ---
 
-*Last updated: 2024-12-01*
+*Last updated: 2024-12-01 (Phase 1 prep session)*
