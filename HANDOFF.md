@@ -4,37 +4,63 @@
 
 Visioneer is an autonomous AI agent architecture for long-running learning/execution projects. It takes high-level goals ("learn jazz piano", "build a product") and executes them over days/weeks — researching, planning, practicing, storing learnings.
 
-## Current State: E2E Validated
+## Current State: Production Ready
 
-All core phases complete and **proven working** with real API calls.
+All core phases complete and **proven working** with real Claude Agent SDK execution.
 
 | Phase | Status | What It Does |
 |-------|--------|--------------|
-| 1. Foundation | ✅ | SQLite database, schema, CRUD operations |
-| 2. Memory System | ✅ | Vector embeddings, semantic search, query planner |
-| 3. Agent Loop | ✅ | Wake-up flow, task prioritization, execution loop |
-| 4. Autonomous Execution | ✅ | Real Claude API calls, stores learnings, dependency unblocking |
-| 5. Goal & Coherence | ✅ | Goal tracking, coherence warnings, auto-reprioritization |
-| 6. E2E Validation | ✅ | Proven with chess learning test (6/6 criteria passed) |
-| 7. Tool Use | ✅ | Web search, web fetch, artifact read/write |
+| 1. Foundation | Done | SQLite database, schema, CRUD operations |
+| 2. Memory System | Done | Vector embeddings, semantic search, query planner |
+| 3. Agent Loop | Done | Wake-up flow, task prioritization, execution loop |
+| 4. Autonomous Execution | Done | Claude SDK execution, stores learnings, dependency unblocking |
+| 5. Goal & Coherence | Done | Goal tracking, coherence warnings, auto-reprioritization |
+| 6. E2E Validation | Done | Proven with chess learning test (6/6 criteria passed) |
+| 7. Tool Use | Done | WebSearch, WebFetch, Read, Write, Bash, Glob, Grep via SDK |
+| 8. Continuous Mode | Done | `npm run agent:continuous` runs until complete/blocked |
+| 9. Memory Research | Done | Comprehensive research on improving memory system |
 
-## E2E Test Results (Chess Learning)
+## Recent Session (2024-12-01)
 
-The system autonomously learned chess basics in 3 cycles:
+### What Was Done
 
-| Criterion | Result |
-|-----------|--------|
-| At least 3 tasks completed | ✅ 3 completed |
-| At least 5 knowledge chunks | ✅ 21 stored |
-| Semantic search returns relevant results | ✅ "checkmate" query: 0.622 similarity |
-| No crashes or unhandled errors | ✅ 0 errors |
-| System reached execution phase | ✅ intake → research → execution |
-| Learnings contain chess terms | ✅ 14 terms (pawn, knight, checkmate, castling...) |
+1. **Fixed Continuous Mode Exit Bug**
+   - Problem: Agent stopped when all tasks done but `progress_snapshot` showed incomplete areas
+   - Root cause: No connection between task completion and progress tracking
+   - Fix: Added re-planning trigger in `cycle.ts:97-113` when tasks=done but progress<100%
+   - Also updated `planner.ts` to be progress-aware
 
-**Run it yourself:**
-```bash
-npm run db:reset    # Reset database
-npm run test:e2e    # Run chess learning test (~85 seconds)
+2. **Created Architecture Documentation**
+   - New file: `docs/ARCHITECTURE.md` (500+ lines)
+   - Documents all 3 layers, data flow, execution cycle, database schema
+   - Includes known issues and extension points
+
+3. **Organized Research Artifacts**
+   - `artifacts/memory-research/` - 15 files on memory improvements
+   - `artifacts/chess-research/` - 7 files from chess learning tests
+   - Cleaned up duplicate/orphan folders
+
+4. **Memory Research Completed**
+   - 59 tasks executed autonomously
+   - Produced actionable recommendations for memory improvements
+   - Key findings in `artifacts/memory-research/visioneer-memory-executive-summary.md`
+
+### Key Memory Research Findings
+
+Top 5 quick wins identified:
+| # | Improvement | Effort | Impact |
+|---|-------------|--------|--------|
+| 1 | Add BM25 Keyword Search | ~3 days | +20-30% retrieval |
+| 2 | Persistence Score Calculator | ~2 days | Smart retention |
+| 3 | Basic Decay Functions | ~2 days | Stops memory bloat |
+| 4 | Contextual Chunk Headers | ~2 days | +35-49% retrieval |
+| 5 | Cross-Encoder Re-ranking | ~1 day | +15-30% accuracy |
+
+Ready-to-implement formulas:
+```
+Persistence Score:  PS = 0.25F + 0.20E + 0.25C + 0.15R + 0.15I
+Decay (Exponential): S(t) = S0 x e^(-0.05t)  [14-day half-life]
+Rank Fusion:        RRF(d) = Sum 1/(60 + rank_i(d))
 ```
 
 ## Quick Start
@@ -47,59 +73,71 @@ npm run db:init
 
 # Run a learning project
 npm run goal "Learn the basics of watercolor painting"
-npm run agent:cycle   # Execute one task
-npm run status        # See progress
+npm run agent:continuous   # Run until complete/blocked
+npm run status             # See progress
 ```
 
 ## CLI Commands
 
 ```bash
-npm run dashboard     # Live-updating terminal dashboard (q: quit, r: refresh, a: answer)
-npm run status        # Project overview, task counts, recent activity
-npm run agent:cycle   # Execute ONE task via Claude API
-npm run answer        # List/answer open questions
-npm run goal "..."    # Set project goal
-npm run goal          # Show current goal
-npm run goal --history # Show past goals
-npm run warnings      # List coherence warnings
-npm run warnings resolve <id> exec|skip|edit  # Resolve warnings
-npm run db:reset      # Reset database
-npm run test:e2e      # Run E2E validation test
+# Core Operations
+npm run goal "..."         # Set a new goal
+npm run agent:continuous   # Run agent continuously until done
+npm run status             # Show current status with progress
+npm run answer             # Answer pending questions
+
+# Monitoring
+npm run dashboard          # Live-updating terminal dashboard
+npm run tasks              # List all tasks
+npm run warnings           # List coherence warnings
+
+# Database
+npm run db:reset           # Reset database
+npm run db:init            # Initialize database
+
+# Testing
+npm run test:e2e           # Run E2E validation test
+npm run sdk:test           # Test SDK connectivity
 ```
 
-## Architecture
+## Architecture Overview
+
+See `docs/ARCHITECTURE.md` for full details.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     ORIENTATION LAYER                        │
-│  Vision, goals, skill map, phase, priorities, progress       │
-│  (Rewrites automatically on major milestones)                │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│                      WORKING LAYER                           │
-│  Tasks (ready/blocked/done), Questions, Activity Log         │
-│  6-factor prioritization with goal alignment                 │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│                     KNOWLEDGE LAYER                          │
-│  Chunks (research, insights, decisions), Embeddings          │
-│  Relationships (supports, contradicts, builds_on)            │
-└─────────────────────────────────────────────────────────────┘
+ORIENTATION LAYER (Strategic Brain)
+├── Vision, goals, priorities, constraints
+├── Skill map with dependencies
+├── Progress tracking per area (progress_snapshot)
+└── Versioned, rewrites on milestones
+
+WORKING LAYER (Operational State)
+├── Tasks (ready -> in_progress -> done/blocked)
+├── Questions (open -> answered)
+├── Activity log
+└── Goal queue (active + pending)
+
+KNOWLEDGE LAYER (Memory)
+├── Chunks (research, insight, decision, attempt)
+├── Embeddings (3072-dim vectors via OpenAI)
+├── Relationships (supports, contradicts, builds_on)
+└── Semantic search via cosine similarity
 ```
 
 ## Agent Cycle Flow
 
 ```
-1. Wake Up         → Load orientation, tasks, questions
-2. Prioritize      → Score tasks by 6 factors including goal alignment
-3. Coherence Check → Is top task aligned with goal? If not, skip & warn
-4. Execute         → Claude API executes task, returns learnings
-5. Store           → Save learnings as knowledge chunks with embeddings
-6. Update          → Mark task done, unblock dependents
-7. Apply Goals     → If pending goal exists, activate it now
-8. Orientation     → Check if rewrite triggered (milestone/threshold)
+1. Wake Up         -> Load orientation, tasks, questions
+2. Plan (if needed) -> Break goal into tasks when:
+                      - No tasks exist
+                      - Goal changed
+                      - All tasks done but progress < 100%
+3. Prioritize      -> Score tasks by 6 factors (goal, priority, deps...)
+4. Execute         -> Claude SDK with full tools (25 turns max)
+5. Store           -> Save learnings as chunks with embeddings
+6. Update          -> Mark task done, unblock dependents
+7. Rewrite         -> Update orientation if milestone hit
+8. Loop/Exit       -> Continue if more tasks, else stop
 ```
 
 ## Key Files
@@ -107,37 +145,34 @@ npm run test:e2e      # Run E2E validation test
 ```
 src/
 ├── agent/
-│   ├── wakeup.ts              # State reconstruction on wake
-│   ├── prioritization.ts      # 6-factor task scoring (incl. goal alignment)
-│   ├── execution.ts           # Work loop, result handling, coherence checks
-│   ├── executor.ts            # Claude API integration with tool loop
-│   ├── cycle.ts               # Single cycle runner
-│   ├── coherence.ts           # Coherence checking module
-│   ├── orientation-rewrite.ts # Auto-rewrite orientation on triggers
-│   └── tools/
-│       ├── index.ts           # Tool definitions for Claude API
-│       └── executor.ts        # Tool implementations (search, fetch, artifacts)
+│   ├── cycle.ts              # Main cycle runner (single + continuous)
+│   ├── wakeup.ts             # State reconstruction on wake
+│   ├── planner.ts            # Goal-to-tasks planning via SDK
+│   ├── executor.ts           # Task execution via SDK
+│   ├── execution.ts          # Work loop, result handling
+│   ├── prioritization.ts     # 6-factor task scoring
+│   ├── orientation-rewrite.ts # SDK-based orientation updates
+│   └── coherence.ts          # Off-track detection (currently disabled)
 ├── cli/
-│   ├── dashboard.ts           # Live-updating terminal dashboard
-│   ├── status.ts              # Project status display
-│   ├── answer.ts              # Question answering
-│   ├── goal.ts                # Goal management CLI
-│   └── warnings.ts            # Coherence warnings CLI
+│   ├── status.ts             # Status display with progress
+│   ├── dashboard.ts          # Live terminal dashboard
+│   ├── answer.ts             # Question answering
+│   └── goal.ts               # Goal management
 ├── db/
-│   ├── schema.sql             # Database schema
-│   ├── queries.ts             # All CRUD operations
-│   └── vector-store.ts        # In-memory embeddings + SQLite persistence
+│   ├── schema.sql            # Database schema
+│   ├── queries.ts            # All CRUD operations
+│   └── vector-store.ts       # In-memory embeddings + SQLite
 ├── embedding/
-│   ├── index.ts               # Embedding provider factory
-│   └── openai.ts              # OpenAI embeddings (text-embedding-3-large)
-├── retrieval/
-│   └── planner.ts             # Query routing (semantic vs tags vs relationships)
-└── mcp/
-    ├── orientation.ts         # MCP server (tested)
-    ├── working.ts             # MCP server (untested)
-    └── knowledge.ts           # MCP server (untested)
-tests/
-└── e2e-chess-test.ts          # End-to-end validation test
+│   └── index.ts              # OpenAI text-embedding-3-large
+└── retrieval/
+    └── planner.ts            # Query routing (semantic/tags/relationships)
+
+docs/
+└── ARCHITECTURE.md           # Comprehensive architecture documentation
+
+artifacts/
+├── memory-research/          # 15 files - memory improvement research
+└── chess-research/           # 7 files - chess learning artifacts
 ```
 
 ## Database Tables
@@ -146,11 +181,11 @@ tests/
 |-------|---------|
 | projects | Project containers |
 | orientation | Strategic brain (JSON blob per project) |
-| tasks | Work items with status, dependencies |
+| tasks | Work items with status, dependencies, failure tracking |
 | questions | Blocking questions awaiting answers |
 | activities | Audit log of all actions |
 | chunks | Knowledge pieces with type, confidence |
-| chunk_embedding_map | Links chunks to vector embeddings |
+| chunk_embeddings_store | Vector embeddings (in-memory + SQLite) |
 | relationships | Connections between chunks |
 | goals | Goal history with outcomes |
 | pending_goals | Queued goals for mid-cycle changes |
@@ -160,130 +195,115 @@ tests/
 
 ```bash
 # .env file needs:
-OPENAI_API_KEY=sk-...      # For embeddings (text-embedding-3-large)
-ANTHROPIC_API_KEY=sk-...   # For Claude executor (claude-sonnet-4)
-SERPER_API_KEY=...         # For web search tool
+OPENAI_API_KEY=sk-...      # Required: For embeddings (text-embedding-3-large)
 
-# Install and initialize:
-npm install
-npm run db:init
-npm run status
+# Optional:
+SERPER_API_KEY=...         # For web search (SDK has built-in WebSearch)
+
+# NOT recommended (uses API credits instead of subscription):
+# ANTHROPIC_API_KEY=sk-...
 ```
 
-## What Works
+**Note:** Do NOT set `ANTHROPIC_API_KEY` if you have a Claude subscription. The SDK will automatically use your subscription when this key is absent.
 
-- **Database layer**: Solid, well-tested
-- **Semantic search**: Real OpenAI embeddings (text-embedding-3-large, 3072 dims)
-- **Wake-up flow**: Clean state reconstruction
-- **Task prioritization**: 6 factors, explainable scores
-- **Execution loop**: Handles complete/blocked/partial/failed
-- **Claude executor**: Real API calls, stores learnings with embeddings
-- **Dependency unblocking**: Auto-unblocks when deps complete
+## Known Issues / Gaps
+
+### 1. Coherence Check Disabled
+**Location:** `execution.ts:179`
+```typescript
+const COHERENCE_CHECK_ENABLED = false;
+```
+The coherence check that verifies tasks align with the current goal is disabled. It was blocking too many valid tasks.
+
+### 2. Progress Tracking is Manual
+The `progress_snapshot` in orientation is updated by the orientation rewrite (Claude), not automatically from task completion. This can cause disconnects.
+
+### 3. No BM25 Keyword Search
+Currently only semantic (embedding) search. Research recommends hybrid retrieval with BM25.
+
+### 4. No Memory Decay
+Chunks persist forever. No forgetting mechanism implemented yet.
+
+### 5. Single Embedding Provider
+Only OpenAI supported. Voyage and Ollama providers are stubbed but not implemented.
+
+## What Works Well
+
+- **Database layer**: Solid, well-tested SQLite with proper schema
+- **Semantic search**: Real OpenAI embeddings (3072 dims), cosine similarity
+- **Wake-up flow**: Clean state reconstruction from persistent storage
+- **Task prioritization**: 6-factor scoring with goal alignment
+- **Execution loop**: Handles complete/blocked/partial/failed states
+- **SDK executor**: Full tool access, up to 25 turns per task
 - **Goal tracking**: History, pending queue, mid-cycle safety
-- **Coherence checking**: Flags off-track tasks before execution (saves API costs)
 - **Orientation rewrite**: Claude-powered updates on milestones
-- **Query planner**: Routes queries to optimal retrieval method
-- **Co-retrieval tracking**: Records which chunks retrieved together
-- **Relationship evolution**: Strengthens connections on use, weakens on contradiction
-- **E2E test**: Proves autonomous learning works
-- **Tool use in executor**: web_search (Serper), web_fetch (HTML extraction), write_artifact, read_artifact
-- **Tool loop**: Handles multiple tool calls per task, feeds results back to Claude
-- **Real research**: Agent reads actual web sources, extracts specific facts
+- **Continuous mode**: Runs until complete or blocked
+- **Artifact management**: Saves research outputs to files
 
 ## Design Decisions
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Vector storage | In-memory + SQLite persistence | Avoids native deps (sqlite-vss Windows issues), fast enough for <10k chunks |
-| Embedding model | text-embedding-3-large (3072 dims) | Best quality, configurable via config |
-| Relationship decay | Only on contradiction, not time | Storage is cheap, old connections may become relevant |
-| Task execution | One task per cycle | Simpler debugging, easier oversight |
-| Orientation rewrite | Claude-powered compression | Maintains semantic quality vs rule-based truncation |
-| Coherence checking | Pre-execution gate | Catch drift before wasting API calls |
+| Vector storage | In-memory + SQLite | Avoids native deps, fast for <10k chunks |
+| Embedding model | text-embedding-3-large | Best quality, 3072 dimensions |
+| Task execution | One task per cycle iteration | Simpler debugging, easier oversight |
+| Tool access | Full SDK tools | WebSearch, Read, Write, Bash, etc. |
+| Orientation rewrite | Claude-powered | Maintains semantic quality |
+| Coherence check | Pre-execution (disabled) | Was too aggressive |
 
-## API Costs (Approximate)
+## SDK Architecture
 
-The E2E chess test (3 cycles, 85 seconds):
-- ~3 Claude Sonnet calls (executor)
-- ~3 Claude Sonnet calls (orientation rewrites)
-- ~25 OpenAI embedding calls (chunks + searches)
-
-Estimate: **~$0.10-0.20 per cycle** depending on context size.
-
-With tools enabled:
-- Serper API: ~$0.001 per search (1000 free searches on signup)
-- Tool-enabled cycles cost more (additional Claude tokens for tool loop)
-
-Cost scales with:
-- Number of learnings stored (embedding costs)
-- Task complexity (longer Claude responses)
-- Orientation size (rewrite costs)
-- Tool usage (more API round-trips)
-
-## Config Options (visioneer.config.json)
-
-| Setting | Default | What it does |
-|---------|---------|--------------|
-| embedding.model | text-embedding-3-large | Which embedding model |
-| embedding.dimensions | 3072 | Vector size |
-| knowledge.min_similarity_threshold | 0.7 | Semantic search cutoff |
-| knowledge.coretrieval_threshold | 3 | Co-retrievals before implicit relationship |
-| agent.model | claude-sonnet-4-20250514 | Executor model |
-| orientation.activity_trigger_count | 50 | Activities before rewrite |
-
-## Tools Configuration
-
-Tools are configured in `visioneer.config.json`:
-
-```json
-"tools": {
-  "web_search": { "enabled": true, "provider": "serper", "max_results": 5 },
-  "web_fetch": { "enabled": true, "max_content_length": 10000 },
-  "artifacts": { "enabled": true, "directory": "./artifacts" }
-}
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    VISIONEER                                │
+│   "The Memory & Context Brain"                              │
+│   - Orientation, knowledge chunks, task management          │
+│   - Provides context to Claude                              │
+│   - Stores learnings from Claude                            │
+└────────────────────────┬────────────────────────────────────┘
+                         │ provides context + task
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│                 CLAUDE CODE (Agent SDK)                     │
+│   "The Execution Hands"                                     │
+│   - Does the actual work (research, file ops, etc.)         │
+│   - Full tool access via subscription                       │
+│   - Returns structured results + learnings                  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-Required API keys in `.env`:
-- `SERPER_API_KEY` - For web search
+## Roadmap / Backlog
 
-Disable tools by setting `"enabled": false` in config.
+| Item | Status | Notes |
+|------|--------|-------|
+| Continuous mode | Done | `npm run agent:continuous` |
+| Memory research | Done | Recommendations in artifacts |
+| Architecture docs | Done | `docs/ARCHITECTURE.md` |
+| BM25 hybrid search | Planned | +20-30% retrieval improvement |
+| Memory decay | Planned | Prevent infinite growth |
+| Persistence scoring | Planned | Smart retention decisions |
+| Web oversight UI | Planned | Browser-based dashboard |
+| Knowledge graph viz | Planned | Visualize chunk relationships |
+| Multi-project support | Planned | Currently single project |
 
-**Test tools manually:**
+## Test Commands
+
 ```bash
-npx tsx tests/test-tools.ts
+npm run test:e2e              # Full E2E chess learning test
+npm run sdk:test              # Basic SDK connectivity
+npm run status                # Quick health check
 ```
 
-## Roadmap (Planned Order)
+## Cost Estimates
 
-1. ~~**Tool Use in Executor**~~ ✅ Complete
-   - ~~Give Claude web_search, web_fetch, write_artifact, read_artifact~~
-   - ~~Transform from "thinking" to "researching and creating"~~
+With Claude subscription (recommended):
+- Embeddings: ~$0.01 per 1000 chunks (OpenAI)
+- SDK execution: Included in subscription
 
-2. ~~**CLI Oversight Dashboard**~~ ✅ Complete
-   - ~~Live-updating terminal dashboard (`npm run dashboard`)~~
-   - ~~Shows progress bar, task/knowledge counts, recent activity~~
-   - ~~Tool calls logged to activity feed~~
-   - ~~Keyboard controls: q (quit), r (refresh), a (answer questions)~~
+Without subscription (API credits):
+- ~$0.10-0.20 per task execution cycle
+- Scales with context size and tool usage
 
-3. **Oversight Web UI** ← NEXT
-   - Web-based dashboard for browser access
-   - View knowledge graph visualization
-   - More advanced question answering interface
+---
 
-4. **Harder Goals**
-   - Test with domains requiring real research
-   - Multi-source synthesis
-   - Longer learning arcs
-
-## What's Next (Backlog)
-
-| Component | State |
-|-----------|-------|
-| CLI Dashboard | ✅ Complete - `npm run dashboard` |
-| Oversight Web UI | Web dashboard, knowledge graph visualization |
-| Multi-task cycle | One task per `agent:cycle` for now |
-| Scheduled triggers | No cron/timer yet |
-| MCP working/knowledge servers | Built but untested |
-| Notifications | No alerts for questions/milestones |
-| Sub-agent spawning | Single Claude call per task |
-| Continuous learning mode | Run multiple cycles automatically |
+*Last updated: 2024-12-01*

@@ -1,17 +1,19 @@
 /**
  * Goal-to-Tasks Planner
  *
- * When a new goal is set and there are no tasks, this module calls Claude
- * to break down the goal into concrete, actionable tasks.
+ * Uses Claude Agent SDK for task planning.
+ *
+ * Architecture:
+ * - Visioneer = Memory Brain (provides context)
+ * - Claude Code SDK = Execution Hands (does the planning work)
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Orientation, Goal } from "../utils/types.js";
-import { getAgentConfig } from "../utils/config.js";
 import { dbLogger } from "../utils/logger.js";
 
 // =============================================================================
-// Types
+// Types (same as original planner.ts)
 // =============================================================================
 
 export interface PlannedTask {
@@ -31,23 +33,29 @@ interface ClaudePlanningResponse {
 }
 
 // =============================================================================
-// Claude Client
-// =============================================================================
-
-let anthropicClient: Anthropic | null = null;
-
-function getAnthropicClient(): Anthropic {
-  if (!anthropicClient) {
-    anthropicClient = new Anthropic();
-  }
-  return anthropicClient;
-}
-
-// =============================================================================
-// Planning Prompt
+// Planning Prompt (preserved from original)
 // =============================================================================
 
 function buildPlanningPrompt(orientation: Orientation, goal: Goal): string {
+  // Build progress section if there are incomplete areas
+  let progressSection = "";
+  if (orientation.progress_snapshot && orientation.progress_snapshot.length > 0) {
+    const incompleteAreas = orientation.progress_snapshot.filter(
+      (p) => p.status !== "complete" && (p.percent === null || p.percent < 100)
+    );
+    const completeAreas = orientation.progress_snapshot.filter(
+      (p) => p.status === "complete" || p.percent === 100
+    );
+
+    if (incompleteAreas.length > 0 || completeAreas.length > 0) {
+      progressSection = `
+
+**Progress Status:**
+${completeAreas.length > 0 ? `Completed areas (DO NOT create tasks for these): ${completeAreas.map((a) => a.area).join(", ")}` : ""}
+${incompleteAreas.length > 0 ? `Incomplete areas (PRIORITIZE these): ${incompleteAreas.map((a) => `${a.area} (${a.percent ?? 0}% - ${a.status})`).join(", ")}` : ""}`;
+    }
+  }
+
   return `You are a planning assistant for the Visioneer autonomous learning system.
 
 ## Project Context
@@ -60,7 +68,7 @@ function buildPlanningPrompt(orientation: Orientation, goal: Goal): string {
 ${orientation.active_priorities.map((p) => `- ${p}`).join("\n")}
 
 **Success Criteria:**
-${orientation.success_criteria.map((c) => `- ${c}`).join("\n")}
+${orientation.success_criteria.map((c) => `- ${c}`).join("\n")}${progressSection}
 
 ## Current Goal
 
@@ -79,9 +87,8 @@ Consider what skills, knowledge, or research are needed to achieve the goal. Sta
 
 ## Response Format
 
-Respond with a JSON object containing an array of tasks:
+Respond with ONLY a JSON object (no markdown code blocks, no extra text). The JSON must have this exact structure:
 
-\`\`\`json
 {
   "tasks": [
     {
@@ -92,7 +99,6 @@ Respond with a JSON object containing an array of tasks:
     }
   ]
 }
-\`\`\`
 
 ### Guidelines
 
@@ -102,21 +108,27 @@ Respond with a JSON object containing an array of tasks:
 - skill_area helps categorize: "research", "fundamentals", "technique", "practice", "project", "review"
 - Keep descriptions focused but informative (2-3 sentences)
 
-Create the task breakdown now.`;
+Create the task breakdown now. Output ONLY the JSON object.`;
 }
 
 // =============================================================================
-// Response Parsing
+// Response Parsing (same logic as original)
 // =============================================================================
 
 function parsePlanningResponse(content: string): PlannedTask[] {
   // Extract JSON from response (may be wrapped in markdown code blocks)
   let jsonStr = content;
 
-  // Try to extract from code block
+  // Try to extract from code block if present
   const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
   if (codeBlockMatch) {
     jsonStr = codeBlockMatch[1];
+  }
+
+  // Also try to find raw JSON object
+  const jsonObjectMatch = content.match(/\{[\s\S]*"tasks"[\s\S]*\}/);
+  if (jsonObjectMatch && !codeBlockMatch) {
+    jsonStr = jsonObjectMatch[0];
   }
 
   // Clean up
@@ -161,13 +173,13 @@ function parsePlanningResponse(content: string): PlannedTask[] {
 }
 
 // =============================================================================
-// Main Planning Function
+// Main SDK Planning Function
 // =============================================================================
 
 /**
- * Calls Claude to break down a goal into tasks.
+ * Plans tasks from a goal using Claude Agent SDK.
  *
- * @param orientation Current project orientation
+ * @param orientation Current project orientation (context)
  * @param goal The goal to plan for
  * @returns Array of planned tasks
  */
@@ -175,43 +187,85 @@ export async function planTasksFromGoal(
   orientation: Orientation,
   goal: Goal
 ): Promise<PlannedTask[]> {
-  const config = getAgentConfig();
-
-  dbLogger.info("Planning tasks from goal", {
+  dbLogger.info("Planning tasks from goal via SDK", {
     goal: goal.goal,
-    model: config.model,
   });
 
-  const client = getAnthropicClient();
   const prompt = buildPlanningPrompt(orientation, goal);
 
   try {
-    const response = await client.messages.create({
-      model: config.model,
-      max_tokens: 2048,
-      messages: [{ role: "user", content: prompt }],
+    // Use SDK query - need enough turns for Claude to respond
+    // Note: SDK may use internal turns even for "pure reasoning" tasks
+    const result = query({
+      prompt,
+      options: {
+        maxTurns: 10, // SDK needs room for internal processing
+        allowedTools: [], // No external tools - just reasoning
+      },
     });
 
-    // Extract text content
-    const textBlocks = response.content.filter(
-      (block): block is Anthropic.TextBlock => block.type === "text"
-    );
+    let responseText = "";
+    let sessionId = "";
+    let durationMs = 0;
+    let messageCount = 0;
 
-    if (textBlocks.length === 0) {
-      throw new Error("No text content in Claude response");
+    // Stream through messages to get the result
+    for await (const message of result) {
+      messageCount++;
+      const msg = message as Record<string, unknown>;
+
+      dbLogger.info("SDK planning message", {
+        count: messageCount,
+        type: msg.type,
+        subtype: msg.subtype,
+        hasResult: !!msg.result,
+        isError: msg.is_error,
+      });
+
+      if (msg.type === "system" && msg.subtype === "init") {
+        sessionId = msg.session_id as string;
+      }
+
+      if (msg.type === "result") {
+        responseText = msg.result as string || "";
+        durationMs = (msg.duration_ms as number) || 0;
+
+        // Check for error result
+        if (msg.is_error) {
+          throw new Error(`SDK planning error: ${responseText}`);
+        }
+      }
     }
 
-    const content = textBlocks.map((b) => b.text).join("\n");
-    const tasks = parsePlanningResponse(content);
+    if (!responseText) {
+      throw new Error(`No response received from SDK (${messageCount} messages processed)`);
+    }
 
-    dbLogger.info("Planning complete", {
+    dbLogger.debug("SDK planning response received", {
+      sessionId,
+      durationMs,
+      responseLength: responseText.length,
+    });
+
+    // Parse the response into tasks
+    const tasks = parsePlanningResponse(responseText);
+
+    dbLogger.info("SDK planning complete", {
       taskCount: tasks.length,
       tasks: tasks.map((t) => t.title),
+      durationMs,
     });
 
     return tasks;
   } catch (error) {
-    dbLogger.error("Planning failed", { error: String(error) });
+    dbLogger.error("SDK planning failed", { error: String(error) });
     throw error;
   }
 }
+
+// =============================================================================
+// Export aliases for compatibility
+// =============================================================================
+
+export { planTasksFromGoal as planTasksSDK };
+export { planTasksFromGoal as planTasksFromGoalSDK };

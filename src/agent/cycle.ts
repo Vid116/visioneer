@@ -40,7 +40,9 @@ import {
   getSessionSummary,
   WakeUpResult,
 } from "./index.js";
-import { claudeExecutor } from "./executor.js";
+
+// SDK-based executor and planner (subscription-based, no API costs)
+import { executor } from "./executor.js";
 import { planTasksFromGoal } from "./planner.js";
 
 // =============================================================================
@@ -92,7 +94,25 @@ async function runSingleCycle(projectId: string, cycleNum?: number): Promise<Cyc
   if (wakeResult.summary.totalTasks === 0) {
     needsPlanning = true;
     planningReason = "No tasks exist";
-  } else if (goal) {
+  } else if (wakeResult.state.orientation?.progress_snapshot) {
+    // Check if all tasks done but progress_snapshot shows incomplete areas
+    const allTasks = getTasks(projectId);
+    const allDone = allTasks.length > 0 && allTasks.every((t) => t.status === "done");
+
+    if (allDone) {
+      const progressSnapshot = wakeResult.state.orientation.progress_snapshot;
+      const incompleteAreas = progressSnapshot.filter(
+        (p) => p.status !== "complete" && (p.percent === null || p.percent < 100)
+      );
+
+      if (incompleteAreas.length > 0) {
+        needsPlanning = true;
+        planningReason = `All tasks done but ${incompleteAreas.length} area(s) incomplete: ${incompleteAreas.map((a) => a.area).join(", ")}`;
+      }
+    }
+  }
+
+  if (!needsPlanning && goal) {
     // Check if any non-done tasks were created AFTER the current goal was set
     // This detects goal changes where old tasks are still present
     const allTasks = getTasks(projectId);
@@ -295,11 +315,11 @@ async function runSingleCycle(projectId: string, cycleNum?: number): Promise<Cyc
   console.log(`  Description: ${currentTask.description.slice(0, 80)}...`);
   console.log(`  Skill Area: ${currentTask.skill_area}`);
   console.log();
-  console.log("  Calling Claude API...");
+  console.log("  Executing via SDK (subscription)...");
   console.log();
 
   // Execute single task via the work loop (handles all the bookkeeping)
-  const session = await executeWorkLoop(currentWakeResult.state, claudeExecutor, {
+  const session = await executeWorkLoop(currentWakeResult.state, executor, {
     maxTasksPerSession: 1, // Only execute one task
   });
 
@@ -362,6 +382,7 @@ async function runContinuous(projectId: string): Promise<void> {
   console.log();
   console.log("========================================");
   console.log("  CONTINUOUS MODE");
+  console.log("  Execution: SDK (subscription)");
   console.log("  Press Ctrl+C to stop");
   console.log("========================================");
   console.log();
@@ -453,6 +474,7 @@ async function runContinuous(projectId: string): Promise<void> {
 async function runCycle(): Promise<void> {
   console.log("========================================");
   console.log("  VISIONEER AGENT CYCLE");
+  console.log("  Mode: SDK (subscription)");
   console.log("========================================");
   console.log();
 
