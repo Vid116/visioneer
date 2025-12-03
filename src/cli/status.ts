@@ -24,6 +24,10 @@ import {
   getRecentActivity,
   getActiveGoal,
   getUnresolvedWarnings,
+  getChunkStats,
+  getRelationshipCount,
+  getRecentChunks,
+  getLastCycleInfo,
 } from "../db/queries.js";
 
 function printStatus() {
@@ -208,6 +212,66 @@ function printStatus() {
     console.log("└─────────────────────────────────────────────────────────────┘");
     console.log();
   }
+
+  // =========================================================================
+  // Knowledge
+  // =========================================================================
+  const chunkStats = getChunkStats(projectId);
+  const relationshipCount = getRelationshipCount(projectId);
+  const recentChunks = getRecentChunks(projectId, 3);
+
+  console.log("┌─ Knowledge ────────────────────────────────────────────────┐");
+
+  if (chunkStats.total > 0) {
+    console.log(`  📚 Chunks: ${chunkStats.total} total`);
+    console.log(`     ✓ Verified: ${chunkStats.verified} | ⚡ Inferred: ${chunkStats.inferred} | ? Speculative: ${chunkStats.speculative}`);
+    console.log(`  🔗 Relationships: ${relationshipCount}`);
+
+    if (recentChunks.length > 0) {
+      console.log("  📝 Recent learnings:");
+      for (const chunk of recentChunks) {
+        const preview = chunk.content.slice(0, 30).replace(/\n/g, " ");
+        console.log(`     • "${preview}..."`);
+      }
+    }
+  } else {
+    console.log("  No knowledge stored yet.");
+    console.log("  Run agent cycles to build knowledge base.");
+  }
+
+  console.log("└───────────────────────────────────────────────────────────┘");
+  console.log();
+
+  // =========================================================================
+  // Last Cycle
+  // =========================================================================
+  const lastCycle = getLastCycleInfo(projectId);
+
+  console.log("┌─ Last Cycle ───────────────────────────────────────────────┐");
+
+  if (lastCycle) {
+    console.log(`  ⏱️  ${formatTime(lastCycle.timestamp)}`);
+
+    if (lastCycle.taskCompleted) {
+      console.log(`  ✅ Completed: "${lastCycle.taskCompleted}"`);
+    }
+
+    if (lastCycle.chunksStored > 0) {
+      console.log(`  📦 Stored: ${lastCycle.chunksStored} chunk${lastCycle.chunksStored > 1 ? "s" : ""}`);
+    }
+
+    if (lastCycle.toolsUsed.size > 0) {
+      const toolList = Array.from(lastCycle.toolsUsed.entries())
+        .map(([name, count]) => `${name} (${count})`)
+        .join(", ");
+      console.log(`  🔍 Tools: ${toolList}`);
+    }
+  } else {
+    console.log("  No cycles run yet. Start with: npm run agent:cycle");
+  }
+
+  console.log("└───────────────────────────────────────────────────────────┘");
+  console.log();
 
   // =========================================================================
   // Quick Actions

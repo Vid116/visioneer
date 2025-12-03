@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     description TEXT,
-    status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'in_progress', 'blocked', 'done')),
+    status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'in_progress', 'blocked', 'done', 'cancelled')),
     skill_area TEXT,
     depends_on TEXT,  -- JSON array of task IDs
     blocked_by TEXT,  -- JSON array of question IDs
@@ -95,7 +95,23 @@ CREATE TABLE IF NOT EXISTS chunks (
     source TEXT NOT NULL CHECK (source IN ('research', 'user', 'deduction', 'experiment')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_useful TIMESTAMP
+    last_useful TIMESTAMP,
+    -- Phase 1 Memory columns
+    tick_created INTEGER DEFAULT 0,
+    tick_last_accessed INTEGER,
+    tick_last_useful INTEGER,
+    learning_context TEXT DEFAULT '{}',
+    initial_strength REAL DEFAULT 1.0,
+    current_strength REAL DEFAULT 1.0,
+    decay_function TEXT DEFAULT 'exponential',
+    decay_rate REAL DEFAULT 0.05,
+    persistence_score REAL DEFAULT 0.5,
+    access_count INTEGER DEFAULT 0,
+    successful_uses INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'active',
+    pinned INTEGER DEFAULT 0,
+    superseded_by TEXT,
+    valid_until_tick INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_project ON chunks(project_id);
@@ -124,12 +140,25 @@ CREATE TABLE IF NOT EXISTS relationships (
     id TEXT PRIMARY KEY,
     from_chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
     to_chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-    type TEXT NOT NULL CHECK (type IN ('supports', 'contradicts', 'builds_on', 'replaces', 'requires', 'related_to')),
+    type TEXT NOT NULL CHECK (type IN (
+        'supports',
+        'contradicts',
+        'builds_on',
+        'replaces',
+        'requires',
+        'related_to',
+        'caused_by',
+        'depends_on',
+        'example_of',
+        'part_of',
+        'derived_from',
+        'precedes'
+    )),
     weight REAL NOT NULL DEFAULT 0.5 CHECK (weight >= 0.0 AND weight <= 1.0),
     last_activated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     activation_count INTEGER DEFAULT 0,
     context_tags TEXT,  -- JSON array
-    origin TEXT NOT NULL DEFAULT 'explicit' CHECK (origin IN ('explicit', 'implicit')),
+    origin TEXT NOT NULL DEFAULT 'explicit' CHECK (origin IN ('explicit', 'implicit', 'inferred', 'auto')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(from_chunk_id, to_chunk_id, type)
 );
@@ -230,3 +259,45 @@ CREATE TABLE IF NOT EXISTS coherence_warnings (
 
 CREATE INDEX IF NOT EXISTS idx_coherence_warnings_project ON coherence_warnings(project_id);
 CREATE INDEX IF NOT EXISTS idx_coherence_warnings_unresolved ON coherence_warnings(project_id, resolved);
+
+-- =============================================================================
+-- PHASE 1 MEMORY IMPROVEMENTS
+-- =============================================================================
+
+-- Agent state for tick tracking
+CREATE TABLE IF NOT EXISTS agent_state (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id),
+  current_tick INTEGER NOT NULL DEFAULT 0,
+  last_decay_tick INTEGER NOT NULL DEFAULT 0,
+  last_consolidation_tick INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Archive table for tombstoned chunks
+CREATE TABLE IF NOT EXISTS chunks_archive (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  content_summary TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  type TEXT NOT NULL,
+  tags TEXT NOT NULL,
+  learning_context TEXT NOT NULL,
+  tick_created INTEGER NOT NULL,
+  tick_archived INTEGER NOT NULL,
+  final_strength REAL NOT NULL,
+  archived_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_archive_project ON chunks_archive(project_id);
+CREATE INDEX IF NOT EXISTS idx_archive_hash ON chunks_archive(content_hash);
+
+-- Indexes for Phase 1 columns (safe to run even if columns don't exist yet - will just fail silently)
+CREATE INDEX IF NOT EXISTS idx_chunks_strength ON chunks(current_strength);
+CREATE INDEX IF NOT EXISTS idx_chunks_status ON chunks(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_chunks_tick ON chunks(tick_created);
+
+-- NOTE: The ALTER TABLE statements for adding Phase 1 columns to chunks table
+-- are in src/db/migrations/001-memory-phase1.sql
+-- Run that migration for existing databases. For new databases, the columns
+-- will be added when the init script runs the migration.

@@ -45,6 +45,12 @@ import {
 import { executor } from "./executor.js";
 import { planTasksFromGoal } from "./planner.js";
 
+// Phase 1: Memory system imports
+import { getTickManager } from "../memory/tick-manager.js";
+import { runDecayProcess } from "../memory/decay.js";
+import { rebuildBM25Index } from "../retrieval/bm25.js";
+import { updateAllPersistenceScores } from "../memory/persistence.js";
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -58,6 +64,7 @@ interface CycleResult {
   totalTasksRemaining: number;
   status: "ready" | "waiting_for_user" | "complete" | "error" | "no_tasks";
   message?: string;
+  tick?: number; // Phase 1: Current cognitive tick
 }
 
 // =============================================================================
@@ -66,6 +73,48 @@ interface CycleResult {
 
 async function runSingleCycle(projectId: string, cycleNum?: number): Promise<CycleResult> {
   const cyclePrefix = cycleNum !== undefined ? `[Cycle ${cycleNum}] ` : "";
+
+  // =========================================================================
+  // Phase 1: Initialize Tick Manager
+  // =========================================================================
+  const tickManager = getTickManager(projectId);
+  await tickManager.initialize();
+  const tick = tickManager.incrementTick();
+  console.log(`┌─ Tick ${tick} ──────────────────────────────────────────────────────┐`);
+
+  // Run decay if needed (every tick by default)
+  if (tickManager.shouldRunDecay(1)) {
+    const state = tickManager.getState();
+    const decayResult = runDecayProcess(projectId, tick, state.last_decay_tick);
+    if (decayResult.processed > 0) {
+      console.log(`  Memory decay: ${decayResult.processed} chunks, ${decayResult.statusChanges} status changes`);
+      if (decayResult.tombstoned > 0) {
+        console.log(`  Tombstoned: ${decayResult.tombstoned} chunks (archived)`);
+      }
+    }
+    tickManager.markDecayRun();
+  }
+
+  // Update persistence scores periodically (every 5 ticks)
+  if (tick % 5 === 0) {
+    const psResult = updateAllPersistenceScores(projectId, tick);
+    if (psResult.updated > 0) {
+      console.log(`  Persistence scores: ${psResult.updated} updated, avg=${psResult.avgScore.toFixed(3)}`);
+    }
+  }
+
+  // Rebuild BM25 index (could optimize to incremental later)
+  try {
+    const indexedCount = await rebuildBM25Index(projectId);
+    if (indexedCount > 0) {
+      console.log(`  BM25 index: ${indexedCount} chunks indexed`);
+    }
+  } catch (error) {
+    console.warn(`  BM25 index rebuild failed:`, error);
+  }
+
+  console.log("└──────────────────────────────────────────────────────────────┘");
+  console.log();
 
   // =========================================================================
   // Step 1: Wake Up
@@ -158,6 +207,7 @@ async function runSingleCycle(projectId: string, cycleNum?: number): Promise<Cyc
       totalTasksRemaining: 0,
       status: "error",
       message: "No goal set. Set a goal first with: npm run goal \"Your goal\"",
+      tick,
     };
   }
 
@@ -229,6 +279,7 @@ async function runSingleCycle(projectId: string, cycleNum?: number): Promise<Cyc
         totalTasksRemaining: 0,
         status: "error",
         message: `Planning failed: ${error}`,
+        tick,
       };
     }
   }
@@ -284,6 +335,7 @@ async function runSingleCycle(projectId: string, cycleNum?: number): Promise<Cyc
       totalTasksRemaining: remainingTasks,
       status: currentWakeResult.state.status === "complete" ? "complete" : "waiting_for_user",
       message: statusMsg,
+      tick,
     };
   }
 
@@ -308,6 +360,7 @@ async function runSingleCycle(projectId: string, cycleNum?: number): Promise<Cyc
       totalTasksRemaining: remainingTasks,
       status: remainingTasks === 0 ? "complete" : "no_tasks",
       message: "No tasks ready to execute",
+      tick,
     };
   }
 
@@ -365,6 +418,7 @@ async function runSingleCycle(projectId: string, cycleNum?: number): Promise<Cyc
     totalTasksDone: updatedDone,
     totalTasksRemaining: updatedRemaining,
     status: updatedRemaining === 0 ? "complete" : canContinue ? "ready" : "waiting_for_user",
+    tick,
   };
 }
 

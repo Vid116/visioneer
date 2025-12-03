@@ -2,6 +2,50 @@ import { getDatabase, prepareStatement, withTransaction } from '../db/connection
 import { ChunkV2, ChunkStatus, DecayFunction, LearningContext } from '../utils/types.js';
 
 /**
+ * Memory Decay System
+ *
+ * Implements tick-based memory decay inspired by cognitive science forgetting curves.
+ * Memories lose strength over cognitive time (ticks), simulating how human memory
+ * naturally fades for unused information while preserving frequently accessed knowledge.
+ *
+ * ## Decay Functions
+ *
+ * - **Exponential**: `S(t) = S₀ × e^(-λt)` - Fast initial decay, long tail. Default for research.
+ * - **Linear**: `S(t) = max(0, S₀ - k×t)` - Predictable, steady decline. Good for decisions.
+ * - **Power Law**: `S(t) = S₀ × (1 + αt)^(-β)` - Very slow decay. Good for core skills.
+ * - **None**: No decay. Used for user input and pinned content.
+ *
+ * ## Category Multipliers
+ *
+ * Different content types decay at different rates:
+ * - `user_input`: 0 (never decays)
+ * - `decision`: 0.3 (slow decay - decisions are important)
+ * - `research`: 1.0 (standard decay)
+ * - `attempt`: 1.5 (faster decay - failed attempts less valuable)
+ * - `superseded`: 3.0 (rapid decay - replaced by newer info)
+ *
+ * ## Status Transitions
+ *
+ * As strength decays, chunks transition through statuses:
+ * ```
+ * active (>0.3) → warm (0.15-0.3) → cool (0.05-0.15) → cold (<0.05) → tombstone (0)
+ * ```
+ *
+ * @example
+ * ```typescript
+ * // Run decay at end of each cycle
+ * const result = runDecayProcess(projectId, currentTick, lastDecayTick);
+ * console.log(`Processed ${result.processed}, tombstoned ${result.tombstoned}`);
+ *
+ * // Reactivate a memory when successfully used
+ * reactivateMemory(chunkId, currentTick, true);
+ * ```
+ *
+ * @see {@link TickManager} for tick management
+ * @see {@link calculatePersistenceScore} for how decay interacts with persistence
+ */
+
+/**
  * Category-based decay multipliers
  * Multiply base decay rate by these values
  */

@@ -295,8 +295,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "answer_question": {
         const { question_id, answer } = AnswerQuestionSchema.parse(args);
         const result = answerQuestion(question_id, answer);
+
+        // Include pivot handling info in response
+        const response = {
+          ...result,
+          pivotNote: result.pivotDetected
+            ? "PIVOT DETECTED: Use handlePivot() to process direction change, cancel tasks, and rewrite orientation."
+            : null,
+        };
+
         return {
-          content: [{ type: "text", text: JSON.stringify(result) }],
+          content: [{ type: "text", text: JSON.stringify(response) }],
         };
       }
       

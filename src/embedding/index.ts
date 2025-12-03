@@ -1,6 +1,7 @@
 import type { EmbeddingProvider } from "./interface.js";
 import { createOpenAIProvider, OpenAIEmbeddingProvider } from "./openai.js";
 import { createMockProvider, MockEmbeddingProvider } from "./mock.js";
+import { createVoyageProvider, VoyageEmbeddingProvider } from "./voyage.js";
 import { getEmbeddingConfig } from "../utils/config.js";
 import { embeddingLogger } from "../utils/logger.js";
 
@@ -8,6 +9,7 @@ import { embeddingLogger } from "../utils/logger.js";
 export type { EmbeddingProvider } from "./interface.js";
 export { OpenAIEmbeddingProvider, createOpenAIProvider } from "./openai.js";
 export { MockEmbeddingProvider, createMockProvider } from "./mock.js";
+export { VoyageEmbeddingProvider, createVoyageProvider } from "./voyage.js";
 
 let cachedProvider: EmbeddingProvider | null = null;
 
@@ -38,8 +40,12 @@ export function getEmbeddingProvider(): EmbeddingProvider {
       break;
 
     case "voyage":
-      // TODO: Implement Voyage provider
-      throw new Error("Voyage embedding provider not yet implemented");
+      cachedProvider = createVoyageProvider({
+        model: config.model,
+        dimensions: config.dimensions,
+        batchSize: config.batch_size,
+      });
+      break;
 
     case "ollama":
       // TODO: Implement Ollama provider

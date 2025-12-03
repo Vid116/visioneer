@@ -20,8 +20,16 @@ import {
   PendingGoal,
   CoherenceWarning,
   CoherenceResolution,
+  DecayFunction,
+  ChunkStatus,
+  LearningContext,
 } from "../utils/types.js";
 import { dbLogger } from "../utils/logger.js";
+import { emitChunkCreated, emitRelationshipCreated } from "../events/event-bus.js";
+import {
+  batchScoreRelationships,
+  isRerankerAvailable,
+} from "../retrieval/reranker.js";
 
 // =============================================================================
 // Projects
@@ -161,6 +169,8 @@ export function createTask(
     failure_reason: null,
     failure_context: null,
     failed_at: null,
+    cancelled_reason: null,
+    cancelled_at: null,
   };
 }
 
@@ -351,7 +361,40 @@ function rowToTask(row: Record<string, unknown>): Task {
       ? JSON.parse(row.failure_context as string)
       : null,
     failed_at: row.failed_at as string | null,
+    cancelled_reason: row.cancelled_reason as string | null,
+    cancelled_at: row.cancelled_at as string | null,
   };
+}
+
+/**
+ * Cancels all non-done tasks for a project due to a pivot.
+ * Tasks that are already 'done' are preserved as completed work.
+ *
+ * @param projectId The project ID
+ * @param reason The reason for cancellation (user feedback)
+ * @returns Number of tasks cancelled
+ */
+export function cancelTasksForPivot(projectId: string, reason: string): number {
+  const now = new Date().toISOString();
+
+  const stmt = prepareStatement(`
+    UPDATE tasks
+    SET status = 'cancelled',
+        cancelled_reason = ?,
+        cancelled_at = ?
+    WHERE project_id = ?
+      AND status NOT IN ('done', 'cancelled')
+  `);
+
+  const result = stmt.run(reason, now, projectId);
+
+  dbLogger.info("Cancelled tasks for pivot", {
+    projectId,
+    cancelledCount: result.changes,
+    reason: reason.slice(0, 100),
+  });
+
+  return result.changes;
 }
 
 // =============================================================================
@@ -431,32 +474,66 @@ export function getQuestions(
   return rows.map(rowToQuestion);
 }
 
+/**
+ * Result of answering a question, including pivot detection.
+ */
+export interface AnswerQuestionResult {
+  question: Question;
+  unblockedTasks: Task[];
+  chunk: Chunk;
+  pivotDetected: boolean;
+  pivotSignals: string[];
+}
+
 export function answerQuestion(
   questionId: string,
   answer: string
-): { question: Question; unblockedTasks: Task[] } {
+): AnswerQuestionResult {
   const now = new Date().toISOString();
-  
+
+  // First get the question to access project_id and context
+  const questionBefore = getQuestion(questionId);
+  if (!questionBefore) {
+    throw new Error(`Question not found: ${questionId}`);
+  }
+
   const stmt = prepareStatement(`
     UPDATE questions SET status = 'answered', answer = ?, answered_at = ?
     WHERE id = ?
   `);
   stmt.run(answer, now, questionId);
-  
+
   const question = getQuestion(questionId)!;
   const unblockedTasks: Task[] = [];
-  
+
+  // Import pivot detection (deferred to avoid circular dependency)
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { detectPivotSignals, extractPivotSignals } = require("../agent/orientation-rewrite.js");
+
+  // Check for pivot signals in the answer
+  const pivotDetected = detectPivotSignals(answer);
+  const pivotSignals = pivotDetected ? extractPivotSignals(answer) : [];
+
+  if (pivotDetected) {
+    dbLogger.info("Pivot detected in user answer - triggering orientation rewrite", {
+      questionId,
+      projectId: question.project_id,
+      pivotSignals,
+      answerPreview: answer.slice(0, 100),
+    });
+  }
+
   // Check each blocked task
   for (const taskId of question.blocks_tasks) {
     const task = getTask(taskId);
     if (!task) continue;
-    
+
     const remainingBlockers = task.blocked_by.filter(qId => qId !== questionId);
-    
+
     if (remainingBlockers.length === 0) {
       // Check if all dependencies are also done
       const incompleteDeps = getIncompleteDependencies(task.depends_on);
-      
+
       if (incompleteDeps.length === 0) {
         updateTask(taskId, { status: "ready", blocked_by: [] });
         unblockedTasks.push(getTask(taskId)!);
@@ -467,10 +544,50 @@ export function answerQuestion(
       updateTask(taskId, { blocked_by: remainingBlockers });
     }
   }
-  
-  dbLogger.debug("Answered question", { questionId, unblockedCount: unblockedTasks.length });
-  
-  return { question, unblockedTasks };
+
+  // Store user answer as a knowledge chunk for retrieval during task execution
+  // This ensures the agent sees the user's feedback when working on unblocked tasks
+  const chunkContent = `USER FEEDBACK on "${question.question}":\n${answer}`;
+  const tags = ["user_answer", "feedback", "user_input"];
+
+  // Add pivot tag if detected
+  if (pivotDetected) {
+    tags.push("pivot", "direction_change");
+  }
+
+  // Add task-related tags for better retrieval
+  for (const taskId of question.blocks_tasks) {
+    tags.push(`task:${taskId}`);
+  }
+
+  // Add context-derived tags if available
+  if (question.context) {
+    // Extract keywords from context (simple approach)
+    const contextWords = question.context
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(w => w.length > 4)
+      .slice(0, 5);
+    tags.push(...contextWords);
+  }
+
+  const chunk = storeChunk(
+    question.project_id,
+    chunkContent,
+    "user_input",
+    tags,
+    "verified",  // User input is always verified
+    "user"
+  );
+
+  dbLogger.debug("Answered question and created chunk", {
+    questionId,
+    unblockedCount: unblockedTasks.length,
+    chunkId: chunk.id,
+    pivotDetected,
+  });
+
+  return { question, unblockedTasks, chunk, pivotDetected, pivotSignals };
 }
 
 function rowToQuestion(row: Record<string, unknown>): Question {
@@ -485,6 +602,46 @@ function rowToQuestion(row: Record<string, unknown>): Question {
     asked_at: row.asked_at as string,
     answered_at: row.answered_at as string | null,
   };
+}
+
+/**
+ * Get all answered questions that were blocking a specific task.
+ * Used to include user feedback in task execution prompts.
+ */
+export function getAnswersForTask(taskId: string): Question[] {
+  // Find all questions where blocks_tasks contains this taskId
+  // SQLite JSON handling: blocks_tasks is a JSON array stored as TEXT
+  const stmt = prepareStatement(`
+    SELECT * FROM questions
+    WHERE status = 'answered'
+      AND blocks_tasks LIKE ?
+    ORDER BY answered_at DESC
+  `);
+
+  // Search for the taskId within the JSON array
+  const rows = stmt.all(`%${taskId}%`) as Record<string, unknown>[];
+
+  // Filter to ensure exact match within the JSON array (not substring match)
+  return rows
+    .map(rowToQuestion)
+    .filter(q => q.blocks_tasks.includes(taskId));
+}
+
+/**
+ * Get recently answered questions for a project (for general context).
+ * Useful for including recent user decisions in any task.
+ */
+export function getRecentAnswers(projectId: string, limit: number = 5): Question[] {
+  const stmt = prepareStatement(`
+    SELECT * FROM questions
+    WHERE project_id = ?
+      AND status = 'answered'
+    ORDER BY answered_at DESC
+    LIMIT ?
+  `);
+
+  const rows = stmt.all(projectId, limit) as Record<string, unknown>[];
+  return rows.map(rowToQuestion);
 }
 
 // =============================================================================
@@ -580,6 +737,123 @@ export function storeChunk(
   });
 }
 
+/**
+ * Phase 1 memory options for chunk storage
+ */
+export interface ChunkV2Options {
+  tick_created: number;
+  learning_context: string; // JSON serialized LearningContext
+  decay_function: DecayFunction;
+  decay_rate: number;
+  initial_strength?: number;
+  persistence_score?: number;
+  pinned?: boolean;
+}
+
+/**
+ * Store a chunk with Phase 1 memory fields
+ */
+export function storeChunkV2(
+  projectId: string,
+  content: string,
+  type: ChunkType,
+  tags: string[],
+  confidence: Confidence,
+  source: Source,
+  embedding: Float32Array | undefined,
+  options: ChunkV2Options
+): Chunk {
+  const id = uuidv4();
+  const now = new Date().toISOString();
+
+  return withTransaction(() => {
+    const stmt = prepareStatement(`
+      INSERT INTO chunks (
+        id, project_id, content, type, tags, confidence, source,
+        created_at, last_accessed,
+        tick_created, tick_last_accessed, learning_context,
+        initial_strength, current_strength, decay_function, decay_rate,
+        persistence_score, access_count, successful_uses,
+        status, pinned
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const initialStrength = options.initial_strength ?? 1.0;
+    const persistenceScore = options.persistence_score ?? 0.5;
+
+    stmt.run(
+      id,
+      projectId,
+      content,
+      type,
+      JSON.stringify(tags),
+      confidence,
+      source,
+      now,
+      now,
+      options.tick_created,
+      options.tick_created, // tick_last_accessed = tick_created initially
+      options.learning_context,
+      initialStrength,
+      initialStrength, // current_strength = initial_strength initially
+      options.decay_function,
+      options.decay_rate,
+      persistenceScore,
+      0, // access_count
+      0, // successful_uses
+      'active' as ChunkStatus,
+      options.pinned ? 1 : 0
+    );
+
+    // Store embedding in vector store if provided
+    if (embedding) {
+      storeVectorEmbedding(id, projectId, embedding);
+    }
+
+    dbLogger.debug("Stored chunk (V2)", {
+      id,
+      type,
+      confidence,
+      tick: options.tick_created,
+      decayFunction: options.decay_function,
+      hasEmbedding: !!embedding,
+    });
+
+    // Emit event for dashboard
+    emitChunkCreated({ id, type, content });
+
+    return {
+      id,
+      project_id: projectId,
+      content,
+      type,
+      tags,
+      confidence,
+      source,
+      created_at: now,
+      last_accessed: now,
+      last_useful: null,
+      // Phase 1 fields
+      tick_created: options.tick_created,
+      tick_last_accessed: options.tick_created,
+      tick_last_useful: null,
+      learning_context: JSON.parse(options.learning_context) as LearningContext,
+      initial_strength: initialStrength,
+      current_strength: initialStrength,
+      decay_function: options.decay_function,
+      decay_rate: options.decay_rate,
+      persistence_score: persistenceScore,
+      access_count: 0,
+      successful_uses: 0,
+      status: 'active' as ChunkStatus,
+      pinned: options.pinned ?? false,
+      superseded_by: null,
+      valid_until_tick: null,
+    };
+  });
+}
+
 export function getChunk(chunkId: string): Chunk | null {
   const stmt = prepareStatement(`
     SELECT * FROM chunks WHERE id = ?
@@ -638,6 +912,16 @@ export function searchChunksByTags(
 }
 
 function rowToChunk(row: Record<string, unknown>): Chunk {
+  // Parse learning context if present
+  let learningContext: LearningContext | undefined;
+  if (row.learning_context) {
+    try {
+      learningContext = JSON.parse(row.learning_context as string);
+    } catch {
+      learningContext = undefined;
+    }
+  }
+
   return {
     id: row.id as string,
     project_id: row.project_id as string,
@@ -649,6 +933,22 @@ function rowToChunk(row: Record<string, unknown>): Chunk {
     created_at: row.created_at as string,
     last_accessed: row.last_accessed as string,
     last_useful: row.last_useful as string | null,
+    // Phase 1 fields (optional for backward compatibility)
+    tick_created: row.tick_created as number | undefined,
+    tick_last_accessed: row.tick_last_accessed as number | null | undefined,
+    tick_last_useful: row.tick_last_useful as number | null | undefined,
+    learning_context: learningContext,
+    initial_strength: row.initial_strength as number | undefined,
+    current_strength: row.current_strength as number | undefined,
+    decay_function: row.decay_function as DecayFunction | undefined,
+    decay_rate: row.decay_rate as number | undefined,
+    persistence_score: row.persistence_score as number | undefined,
+    access_count: row.access_count as number | undefined,
+    successful_uses: row.successful_uses as number | undefined,
+    status: row.status as ChunkStatus | undefined,
+    pinned: row.pinned === 1 || row.pinned === true,
+    superseded_by: row.superseded_by as string | null | undefined,
+    valid_until_tick: row.valid_until_tick as number | null | undefined,
   };
 }
 
@@ -680,7 +980,10 @@ export function createRelationship(
 ): Relationship {
   const id = uuidv4();
   const now = new Date().toISOString();
-  
+
+  // Clamp weight to valid range [0.0, 1.0] to satisfy CHECK constraint
+  const clampedWeight = Math.max(0.0, Math.min(1.0, weight));
+
   const stmt = prepareStatement(`
     INSERT INTO relationships (id, from_chunk_id, to_chunk_id, type, weight, context_tags, origin, created_at, last_activated)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -690,16 +993,19 @@ export function createRelationship(
       last_activated = excluded.last_activated
   `);
   
-  stmt.run(id, fromChunkId, toChunkId, type, weight, JSON.stringify(contextTags), origin, now, now);
-  
-  dbLogger.debug("Created relationship", { fromChunkId, toChunkId, type, weight });
+  stmt.run(id, fromChunkId, toChunkId, type, clampedWeight, JSON.stringify(contextTags), origin, now, now);
+
+  dbLogger.debug("Created relationship", { fromChunkId, toChunkId, type, weight: clampedWeight });
+
+  // Emit event for dashboard
+  emitRelationshipCreated({ fromId: fromChunkId, toId: toChunkId, type, weight: clampedWeight });
   
   return {
     id,
     from_chunk_id: fromChunkId,
     to_chunk_id: toChunkId,
     type,
-    weight,
+    weight: clampedWeight,
     last_activated: now,
     activation_count: 0,
     context_tags: contextTags,
@@ -1340,4 +1646,384 @@ function rowToCoherenceWarning(row: Record<string, unknown>): CoherenceWarning {
     resolved: (row.resolved as number) === 1,
     resolution: row.resolution as CoherenceResolution | null,
   };
+}
+
+// =============================================================================
+// Knowledge Stats (for status display)
+// =============================================================================
+
+export interface ChunkStats {
+  total: number;
+  verified: number;
+  inferred: number;
+  speculative: number;
+}
+
+export interface RecentChunk {
+  content: string;
+  tags: string[];
+  created_at: string;
+}
+
+/**
+ * Gets chunk counts grouped by confidence level.
+ */
+export function getChunkStats(projectId: string): ChunkStats {
+  const stmt = prepareStatement(`
+    SELECT confidence, COUNT(*) as count
+    FROM chunks
+    WHERE project_id = ?
+    GROUP BY confidence
+  `);
+
+  const rows = stmt.all(projectId) as { confidence: string; count: number }[];
+
+  const stats: ChunkStats = {
+    total: 0,
+    verified: 0,
+    inferred: 0,
+    speculative: 0,
+  };
+
+  for (const row of rows) {
+    stats.total += row.count;
+    if (row.confidence === "verified") stats.verified = row.count;
+    else if (row.confidence === "inferred") stats.inferred = row.count;
+    else if (row.confidence === "speculative") stats.speculative = row.count;
+  }
+
+  return stats;
+}
+
+/**
+ * Gets total relationship count for a project.
+ */
+export function getRelationshipCount(projectId: string): number {
+  const stmt = prepareStatement(`
+    SELECT COUNT(*) as count
+    FROM relationships r
+    JOIN chunks c ON r.from_chunk_id = c.id
+    WHERE c.project_id = ?
+  `);
+
+  const row = stmt.get(projectId) as { count: number };
+  return row.count;
+}
+
+/**
+ * Gets the most recent chunks for a project.
+ */
+export function getRecentChunks(projectId: string, limit: number = 3): RecentChunk[] {
+  const stmt = prepareStatement(`
+    SELECT content, tags, created_at
+    FROM chunks
+    WHERE project_id = ?
+    ORDER BY created_at DESC
+    LIMIT ?
+  `);
+
+  const rows = stmt.all(projectId, limit) as { content: string; tags: string; created_at: string }[];
+
+  return rows.map(row => ({
+    content: row.content,
+    tags: JSON.parse(row.tags || "[]"),
+    created_at: row.created_at,
+  }));
+}
+
+// =============================================================================
+// Last Cycle Stats (for status display)
+// =============================================================================
+
+export interface LastCycleInfo {
+  timestamp: string;
+  taskCompleted: string | null;
+  chunksStored: number;
+  toolsUsed: Map<string, number>;
+}
+
+/**
+ * Gets information about the last agent cycle from activity logs.
+ */
+export function getLastCycleInfo(projectId: string): LastCycleInfo | null {
+  const stmt = prepareStatement(`
+    SELECT action, details, timestamp
+    FROM activities
+    WHERE project_id = ?
+    ORDER BY timestamp DESC
+    LIMIT 20
+  `);
+
+  const rows = stmt.all(projectId) as { action: string; details: string | null; timestamp: string }[];
+
+  if (rows.length === 0) return null;
+
+  // Find the most recent cycle-related activity
+  let cycleTimestamp: string | null = null;
+  let taskCompleted: string | null = null;
+  let chunksStored = 0;
+  const toolsUsed = new Map<string, number>();
+
+  for (const row of rows) {
+    const details = row.details ? JSON.parse(row.details) : null;
+
+    // Use the first activity timestamp as the cycle time
+    if (!cycleTimestamp) {
+      cycleTimestamp = row.timestamp;
+    }
+
+    // Look for task completion - action format is "Completed: {task title}"
+    if (row.action.startsWith("Completed: ") || row.action.startsWith("SDK Completed: ")) {
+      if (!taskCompleted) {
+        taskCompleted = row.action.replace(/^(SDK )?Completed: /, "");
+      }
+    } else if (row.action === "task_completed" && details?.title) {
+      if (!taskCompleted) {
+        taskCompleted = details.title;
+      }
+    }
+
+    // Count chunk storage
+    if (row.action === "chunk_stored" || row.action.includes("chunk")) {
+      chunksStored++;
+    }
+
+    // Track tool usage from details
+    if (details?.tool) {
+      const tool = details.tool as string;
+      toolsUsed.set(tool, (toolsUsed.get(tool) || 0) + 1);
+    }
+    // Handle toolCalls array from old executor format
+    if (details?.toolCalls && Array.isArray(details.toolCalls)) {
+      for (const tc of details.toolCalls) {
+        if (tc.name) {
+          toolsUsed.set(tc.name, (toolsUsed.get(tc.name) || 0) + (tc.count || 1));
+        }
+      }
+    }
+    // Handle toolsUsed array from SDK executor format
+    if (details?.toolsUsed && Array.isArray(details.toolsUsed)) {
+      for (const tool of details.toolsUsed) {
+        if (typeof tool === "string") {
+          toolsUsed.set(tool, (toolsUsed.get(tool) || 0) + 1);
+        }
+      }
+    }
+  }
+
+  if (!cycleTimestamp) return null;
+
+  return {
+    timestamp: cycleTimestamp,
+    taskCompleted,
+    chunksStored,
+    toolsUsed,
+  };
+}
+
+// =============================================================================
+// Relationship Expansion (for knowledge retrieval)
+// =============================================================================
+
+export interface ExpandedChunk extends Chunk {
+  _relationshipType?: RelationshipType;
+  _relationshipWeight?: number;
+  _fromChunkId?: string;
+}
+
+/**
+ * Expands a set of chunk IDs by traversing relationships.
+ * Returns related chunks that are connected to the input chunks.
+ *
+ * @param chunkIds - The initial set of chunk IDs to expand from
+ * @param projectId - Project ID to filter chunks
+ * @param minWeight - Minimum relationship weight to consider (default 0.3)
+ * @param depth - How many levels of relationships to traverse (default 1)
+ * @returns Array of related chunks with relationship metadata
+ */
+export function expandWithRelationships(
+  chunkIds: string[],
+  projectId: string,
+  minWeight: number = 0.3,
+  depth: number = 1
+): ExpandedChunk[] {
+  const relatedChunks: ExpandedChunk[] = [];
+  const seen = new Set(chunkIds);
+  let currentLevel = [...chunkIds];
+
+  for (let d = 0; d < depth; d++) {
+    const nextLevel: string[] = [];
+
+    for (const chunkId of currentLevel) {
+      const relationships = getRelationships(chunkId, undefined, minWeight, "both", 10);
+
+      for (const { relationship, direction } of relationships) {
+        const relatedId = direction === "outgoing"
+          ? relationship.to_chunk_id
+          : relationship.from_chunk_id;
+
+        if (!seen.has(relatedId)) {
+          seen.add(relatedId);
+          const chunk = getChunk(relatedId);
+
+          if (chunk && chunk.project_id === projectId) {
+            relatedChunks.push({
+              ...chunk,
+              _relationshipType: relationship.type,
+              _relationshipWeight: relationship.weight,
+              _fromChunkId: chunkId,
+            });
+            nextLevel.push(relatedId);
+          }
+        }
+      }
+    }
+
+    currentLevel = nextLevel;
+    if (currentLevel.length === 0) break;
+  }
+
+  // Sort by relationship weight (strongest first)
+  relatedChunks.sort((a, b) => (b._relationshipWeight || 0) - (a._relationshipWeight || 0));
+
+  return relatedChunks;
+}
+
+/**
+ * Creates relationships between a new chunk and similar existing chunks.
+ * Called after storing a new chunk to build the knowledge graph.
+ *
+ * Uses cross-encoder when available for more accurate relationship scoring.
+ *
+ * @param newChunkId - The ID of the newly stored chunk
+ * @param projectId - Project ID
+ * @param embedding - The embedding vector of the new chunk
+ * @param tags - Tags of the new chunk (used to determine relationship type)
+ * @param options - Options for relationship creation
+ */
+export async function createRelationshipsForNewChunk(
+  newChunkId: string,
+  projectId: string,
+  embedding: Float32Array,
+  tags: string[] = [],
+  options: { useCrossEncoder?: boolean } = {}
+): Promise<number> {
+  const { useCrossEncoder = true } = options;
+
+  // Find similar existing chunks
+  const similar = searchSemantic(projectId, embedding, 5, 0.6);
+  let created = 0;
+
+  if (similar.length === 0) {
+    return 0;
+  }
+
+  // Get the new chunk for cross-encoder scoring
+  const newChunk = getChunk(newChunkId);
+  if (!newChunk) {
+    return 0;
+  }
+
+  // Load full chunk data for similar chunks
+  const candidateChunks: Array<{
+    id: string;
+    content: string;
+    type: string;
+    tags: string[];
+    embeddingSimilarity: number;
+  }> = [];
+
+  for (const match of similar) {
+    // Don't create self-relationship
+    if (match.chunkId === newChunkId) continue;
+
+    const existingChunk = getChunk(match.chunkId);
+    if (!existingChunk) continue;
+
+    candidateChunks.push({
+      id: existingChunk.id,
+      content: existingChunk.content,
+      type: existingChunk.type,
+      tags: existingChunk.tags,
+      embeddingSimilarity: match.similarity,
+    });
+  }
+
+  if (candidateChunks.length === 0) {
+    return 0;
+  }
+
+  // Try cross-encoder scoring
+  if (useCrossEncoder && (await isRerankerAvailable())) {
+    dbLogger.debug(`Scoring ${candidateChunks.length} relationships with cross-encoder`);
+
+    const scores = await batchScoreRelationships(
+      candidateChunks.map((c) => ({
+        chunkA: { id: newChunk.id, content: newChunk.content, type: newChunk.type },
+        chunkB: { id: c.id, content: c.content, type: c.type },
+      }))
+    );
+
+    for (let i = 0; i < candidateChunks.length; i++) {
+      const candidate = candidateChunks[i];
+      const score = scores[i];
+
+      if (score && score.score > 0.4) {
+        // Cross-encoder threshold
+        createRelationship(
+          newChunkId,
+          candidate.id,
+          score.suggestedType,
+          score.score, // Use cross-encoder score as weight
+          tags.slice(0, 5),
+          "auto"
+        );
+        created++;
+
+        dbLogger.debug("Created relationship via cross-encoder", {
+          from: newChunkId,
+          to: candidate.id,
+          type: score.suggestedType,
+          weight: score.score,
+          typeConfidence: score.typeConfidence,
+        });
+      }
+    }
+  } else {
+    // Fall back to embedding similarity + heuristics (existing logic)
+    dbLogger.debug(`Scoring ${candidateChunks.length} relationships with embedding similarity`);
+
+    for (const candidate of candidateChunks) {
+      const similarity = candidate.embeddingSimilarity;
+
+      // Determine type based on similarity threshold and tag overlap
+      const tagOverlap = tags.filter((t) => candidate.tags.includes(t)).length;
+      const hasCommonTags = tagOverlap > 0;
+
+      // Higher similarity + common tags = builds_on, otherwise related_to
+      const relType: RelationshipType =
+        similarity > 0.75 || hasCommonTags ? "builds_on" : "related_to";
+
+      if (similarity > 0.6) {
+        createRelationship(
+          newChunkId,
+          candidate.id,
+          relType,
+          similarity, // Use similarity as initial weight
+          tags.slice(0, 5), // Store up to 5 context tags
+          "explicit"
+        );
+        created++;
+
+        dbLogger.debug("Created relationship via embedding similarity", {
+          from: newChunkId,
+          to: candidate.id,
+          type: relType,
+          weight: similarity,
+        });
+      }
+    }
+  }
+
+  return created;
 }

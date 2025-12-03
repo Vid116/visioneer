@@ -23,14 +23,34 @@ import {
   getRecentActivity,
   getOrientation,
   storeChunk,
+  storeChunkV2,
   getActiveGoal,
   getPendingGoal,
   applyPendingGoal,
+  createRelationshipsForNewChunk,
 } from "../db/queries.js";
+import {
+  captureLearningContext,
+  getDecaySettings,
+  serializeLearningContext,
+  ExecutionContext,
+} from "../memory/context-capture.js";
+import { getTickManager } from "../memory/tick-manager.js";
+import {
+  checkForContradictions,
+  handleContradiction,
+  PotentialContradiction,
+  ContradictionCheckResult,
+} from "../memory/contradiction.js";
 import { embed } from "../embedding/index.js";
 import { prioritizeTasksSimple, getActionableTasks } from "./prioritization.js";
 import { enforceCoherence } from "./coherence.js";
-import { checkAndRewriteOrientation } from "./orientation-rewrite.js";
+import {
+  shouldRewriteOrientation,
+  RewriteResult,
+  rewriteOrientationFromState,
+  RewriteTrigger,
+} from "./orientation-rewrite.js";
 import {
   AgentState,
   Task,
@@ -40,6 +60,79 @@ import {
 } from "../utils/types.js";
 import { getAgentConfig } from "../utils/config.js";
 import { dbLogger } from "../utils/logger.js";
+import {
+  saveOrientation,
+  storeChunk as storeChunkDb,
+  logActivity as logActivityDb,
+} from "../db/queries.js";
+
+/**
+ * SDK-based orientation rewrite wrapper.
+ * Checks trigger conditions and performs rewrite via SDK.
+ */
+async function checkAndRewriteOrientationSDK(
+  projectId: string,
+  completedTask?: Task | null
+): Promise<RewriteResult | null> {
+  const trigger = shouldRewriteOrientation(projectId, completedTask);
+  if (!trigger) {
+    return null;
+  }
+
+  const orientation = getOrientation(projectId);
+  if (!orientation) {
+    return { success: false, error: "No orientation found" };
+  }
+
+  const allTasks = getTasks(projectId);
+  const recentActivity = getRecentActivity(projectId, 20);
+  const currentGoal = getActiveGoal(projectId);
+
+  // Archive current orientation
+  storeChunkDb(
+    projectId,
+    JSON.stringify(orientation),
+    "decision",
+    ["orientation_archive", `v${orientation.version}`],
+    "verified",
+    "deduction"
+  );
+
+  try {
+    const newOrientation = await rewriteOrientationFromState(
+      orientation,
+      allTasks,
+      currentGoal,
+      recentActivity.map((a) => ({ action: a.action, timestamp: a.timestamp })),
+      trigger as RewriteTrigger
+    );
+
+    saveOrientation(newOrientation);
+
+    logActivityDb(projectId, "Orientation rewritten", {
+      trigger,
+      previousVersion: orientation.version,
+      newVersion: newOrientation.version,
+    });
+
+    dbLogger.info("Orientation rewrite complete", {
+      projectId,
+      newVersion: newOrientation.version,
+    });
+
+    return {
+      success: true,
+      newOrientation,
+      previousVersion: orientation.version,
+    };
+  } catch (error) {
+    dbLogger.error("Orientation rewrite failed", { projectId, error });
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
 
 // =============================================================================
 // Types
@@ -86,6 +179,7 @@ export interface ExecutionSession {
   startTime: string;
   endTime?: string;
   currentGoal?: Goal | null;
+  currentTick?: number; // Phase 1: Current cognitive tick
 }
 
 export interface ExecutionConfig {
@@ -127,6 +221,11 @@ export async function executeWorkLoop(
   // Get current goal for prioritization and coherence checking
   const currentGoal = getActiveGoal(initialState.orientation!.project_id);
 
+  // Phase 1: Initialize tick manager and increment tick for this cycle
+  const tickManager = getTickManager(initialState.orientation!.project_id);
+  await tickManager.initialize();
+  const currentTick = tickManager.incrementTick();
+
   const session: ExecutionSession = {
     projectId: initialState.orientation!.project_id,
     state: { ...initialState },
@@ -137,6 +236,7 @@ export async function executeWorkLoop(
     learningsStored: 0,
     startTime: new Date().toISOString(),
     currentGoal,
+    currentTick, // Phase 1: Track current tick
   };
 
   dbLogger.info("Starting execution loop", {
@@ -216,7 +316,7 @@ export async function executeWorkLoop(
 
     // Check for orientation rewrite trigger
     if (result.status === "complete") {
-      const rewriteResult = await checkAndRewriteOrientation(session.projectId, task);
+      const rewriteResult = await checkAndRewriteOrientationSDK(session.projectId, task);
       if (rewriteResult?.success && rewriteResult.newOrientation) {
         // Update session state with new orientation
         session.state.orientation = rewriteResult.newOrientation;
@@ -332,10 +432,10 @@ async function handleComplete(
     outcome: result.outcome?.slice(0, 100),
   });
 
-  // Store learnings
+  // Store learnings with task context
   if (result.learnings) {
     for (const learning of result.learnings) {
-      await storeLearning(session, learning);
+      await storeLearning(session, learning, task);
     }
   }
 
@@ -406,10 +506,10 @@ async function handlePartial(
     description: `${task.description}\n\n[Progress: ${result.outcome}]`,
   });
 
-  // Store any learnings from partial progress
+  // Store any learnings from partial progress with task context
   if (result.learnings) {
     for (const learning of result.learnings) {
-      await storeLearning(session, learning);
+      await storeLearning(session, learning, task);
     }
   }
 
@@ -481,11 +581,90 @@ async function handleFailed(
 
 async function storeLearning(
   session: ExecutionSession,
-  learning: Learning
-): Promise<void> {
+  learning: Learning,
+  task?: Task | null,
+  relatedChunkIds: string[] = []
+): Promise<{ chunk: Chunk; contradictions?: PotentialContradiction[] }> {
+  let embedding: Float32Array | undefined;
+  let storedChunk;
+  let contradictionResult: ContradictionCheckResult | undefined;
+
   try {
-    const embedding = await embed(learning.content);
-    storeChunk(
+    embedding = await embed(learning.content);
+  } catch {
+    // Continue without embedding if embedding fails
+    embedding = undefined;
+  }
+
+  // Phase 2: Check for contradictions before storing (if we have embedding)
+  if (embedding) {
+    try {
+      contradictionResult = await checkForContradictions(
+        session.projectId,
+        learning.content,
+        embedding,
+        learning.type
+      );
+
+      if (contradictionResult.hasContradictions) {
+        dbLogger.info(
+          `Found ${contradictionResult.contradictions.length} potential contradictions`,
+          {
+            suggestedAction: contradictionResult.suggestedAction,
+            contradictions: contradictionResult.contradictions.map((c) => ({
+              existingChunkId: c.existingChunk.id,
+              conflictType: c.conflictType,
+              confidence: c.confidence,
+              explanation: c.explanation,
+            })),
+          }
+        );
+      }
+    } catch (err) {
+      dbLogger.warn("Failed to check for contradictions", {
+        error: String(err),
+      });
+    }
+  }
+
+  // Phase 1: Use storeChunkV2 with learning context if we have tick info
+  if (session.currentTick !== undefined && session.state.orientation) {
+    // Build execution context
+    const execContext: ExecutionContext = {
+      tick: session.currentTick,
+      task: task ?? null,
+      goalId: session.currentGoal?.id ?? null,
+      orientation: session.state.orientation,
+    };
+
+    // Capture learning context
+    const learningContext = captureLearningContext(
+      execContext,
+      `Task: ${task?.title ?? 'unknown'}`,
+      relatedChunkIds
+    );
+
+    // Get decay settings based on type and tags
+    const decaySettings = getDecaySettings(learning.type, learning.tags);
+
+    storedChunk = storeChunkV2(
+      session.projectId,
+      learning.content,
+      learning.type,
+      learning.tags,
+      learning.confidence,
+      "experiment",
+      embedding,
+      {
+        tick_created: session.currentTick,
+        learning_context: serializeLearningContext(learningContext),
+        decay_function: decaySettings.function,
+        decay_rate: decaySettings.rate,
+      }
+    );
+  } else {
+    // Fallback to original storeChunk for backward compatibility
+    storedChunk = storeChunk(
       session.projectId,
       learning.content,
       learning.type,
@@ -494,21 +673,57 @@ async function storeLearning(
       "experiment",
       embedding
     );
-  } catch {
-    // Store without embedding if embedding fails
-    storeChunk(
-      session.projectId,
-      learning.content,
-      learning.type,
-      learning.tags,
-      learning.confidence,
-      "experiment"
-    );
+  }
+
+  // Handle contradictions after storage
+  if (contradictionResult?.hasContradictions && storedChunk) {
+    for (const contradiction of contradictionResult.contradictions) {
+      // Determine action based on suggested action
+      const action =
+        contradictionResult.suggestedAction === "supersede"
+          ? "supersede"
+          : "link_only";
+      handleContradiction(storedChunk.id, contradiction, action);
+    }
+  }
+
+  // Create relationships to similar existing chunks
+  if (storedChunk && embedding) {
+    try {
+      const relationshipsCreated = createRelationshipsForNewChunk(
+        storedChunk.id,
+        session.projectId,
+        embedding,
+        learning.tags
+      );
+
+      if (relationshipsCreated > 0) {
+        dbLogger.debug("Created relationships for new chunk", {
+          chunkId: storedChunk.id,
+          relationshipsCreated,
+        });
+      }
+    } catch (err) {
+      dbLogger.warn("Failed to create relationships for chunk", {
+        chunkId: storedChunk.id,
+        error: String(err),
+      });
+    }
   }
 
   session.learningsStored++;
 
-  dbLogger.debug("Stored learning", { type: learning.type, tags: learning.tags });
+  dbLogger.debug("Stored learning", {
+    type: learning.type,
+    tags: learning.tags,
+    tick: session.currentTick,
+    contradictionsFound: contradictionResult?.contradictions.length ?? 0,
+  });
+
+  return {
+    chunk: storedChunk,
+    contradictions: contradictionResult?.contradictions,
+  };
 }
 
 // =============================================================================

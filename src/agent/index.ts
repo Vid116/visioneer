@@ -46,8 +46,8 @@ export {
   type ExecutionConfig,
 } from "./execution.js";
 
-// Claude API executor
-export { createClaudeExecutor, claudeExecutor } from "./executor.js";
+// Task executor (SDK-based, subscription, no API costs)
+export { executor, createExecutor, executeTask } from "./executor.js";
 
 // Coherence checking
 export {
@@ -62,8 +62,13 @@ export {
 // Orientation rewrite
 export {
   rewriteOrientation,
+  rewriteOrientationFromState,
   shouldRewriteOrientation,
-  checkAndRewriteOrientation,
+  buildRewriteContext,
   type RewriteTrigger,
   type RewriteResult,
+  type RewriteContext,
 } from "./orientation-rewrite.js";
+
+// Goal-to-tasks planner
+export { planTasksFromGoal, type PlannedTask } from "./planner.js";

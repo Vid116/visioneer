@@ -4,6 +4,7 @@
  * Answer Question CLI
  *
  * Lists open questions and allows answering them.
+ * Detects pivot signals in answers and triggers orientation rewrite.
  *
  * Usage:
  *   npx tsx src/cli/answer.ts              # List open questions
@@ -12,8 +13,9 @@
 
 import { initializeSchema, closeDatabase } from "../db/connection.js";
 import { listProjects, getQuestions, answerQuestion, getTask } from "../db/queries.js";
+import { handlePivot } from "../agent/orientation-rewrite.js";
 
-function main() {
+async function main() {
   initializeSchema();
 
   // Get project
@@ -49,7 +51,7 @@ function main() {
   if (args.length >= 2) {
     const questionId = args[0];
     const answer = args.slice(1).join(" ");
-    answerQuestionCLI(projectId, questionId, answer);
+    await answerQuestionCLI(projectId, questionId, answer);
     closeDatabase();
     return;
   }
@@ -148,7 +150,7 @@ function showQuestion(projectId: string, partialId: string) {
   console.log("└─────────────────────────────────────────────────────────────┘");
 }
 
-function answerQuestionCLI(projectId: string, partialId: string, answer: string) {
+async function answerQuestionCLI(projectId: string, partialId: string, answer: string) {
   const questions = getQuestions(projectId);
   const question = questions.find((q) => q.id.startsWith(partialId));
 
@@ -180,8 +182,37 @@ function answerQuestionCLI(projectId: string, partialId: string, answer: string)
     }
   }
 
+  // Handle pivot if detected
+  if (result.pivotDetected) {
+    console.log();
+    console.log("┌─────────────────────────────────────────────────────────────┐");
+    console.log("│  🔄 PIVOT DETECTED                                          │");
+    console.log("├─────────────────────────────────────────────────────────────┤");
+    console.log(`  Signals: ${result.pivotSignals.join(", ")}`);
+    console.log();
+    console.log("  Processing direction change...");
+    console.log();
+
+    const pivotResult = await handlePivot(projectId, answer, result.pivotSignals);
+
+    if (pivotResult.success) {
+      console.log(`  ✅ Cancelled ${pivotResult.tasksCancelled} task(s)`);
+      console.log(`  ✅ Orientation updated (v${pivotResult.newOrientation?.version})`);
+      console.log();
+      console.log("  The agent will plan new tasks based on your feedback");
+      console.log("  on the next cycle run.");
+    } else {
+      console.log(`  ❌ Pivot handling failed: ${pivotResult.error}`);
+    }
+    console.log("└─────────────────────────────────────────────────────────────┘");
+  }
+
   console.log();
   console.log("Run 'npm run agent:cycle' to continue.");
 }
 
-main();
+main().catch((error) => {
+  console.error("Error:", error);
+  closeDatabase();
+  process.exit(1);
+});

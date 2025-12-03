@@ -1,9 +1,37 @@
 import { getDatabase, prepareStatement } from '../db/connection.js';
 import { TickState } from '../utils/types.js';
+import { emitTickAdvance } from '../events/event-bus.js';
 
 /**
- * Manages cognitive ticks - the agent's internal time
- * One tick = one complete agent cycle
+ * Tick Manager - Cognitive Time Tracking
+ *
+ * Manages the "cognitive tick" which represents one cycle of agent activity.
+ * Ticks are used for:
+ * - **Memory decay**: Memories decay over ticks, not wall-clock time
+ * - **Learning context**: Records which tick a memory was created/accessed
+ * - **Scheduling**: Triggers decay and consolidation processes at intervals
+ *
+ * Unlike wall-clock time, cognitive ticks only advance when the agent is active,
+ * making memory decay proportional to agent activity rather than elapsed time.
+ *
+ * @example
+ * ```typescript
+ * const manager = getTickManager(projectId);
+ * await manager.initialize();
+ *
+ * // At start of each cycle
+ * const tick = manager.incrementTick();
+ * console.log(`Starting cycle ${tick}`);
+ *
+ * // Check if maintenance needed
+ * if (manager.shouldRunDecay()) {
+ *   runDecayProcess(projectId, tick, manager.getState().last_decay_tick);
+ *   manager.markDecayRun();
+ * }
+ * ```
+ *
+ * @see {@link runDecayProcess} for decay implementation
+ * @see {@link LearningContext} for how ticks are used in context capture
  */
 export class TickManager {
   private projectId: string;
@@ -58,6 +86,9 @@ export class TickManager {
       WHERE project_id = ?
     `);
     stmt.run(this.currentTick, this.projectId);
+
+    // Emit event for dashboard
+    emitTickAdvance(this.currentTick);
 
     return this.currentTick;
   }

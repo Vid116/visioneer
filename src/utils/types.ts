@@ -14,7 +14,7 @@ export type Phase =
   | "refinement"
   | "complete";
 
-export type TaskStatus = "ready" | "in_progress" | "blocked" | "done";
+export type TaskStatus = "ready" | "in_progress" | "blocked" | "done" | "cancelled";
 
 export type QuestionStatus = "open" | "answered";
 
@@ -36,9 +36,164 @@ export type RelationshipType =
   | "builds_on"
   | "replaces"
   | "requires"
-  | "related_to";
+  | "related_to"
+  | "caused_by"
+  | "depends_on"
+  | "example_of"
+  | "part_of"
+  | "derived_from"
+  | "precedes";
 
-export type RelationshipOrigin = "explicit" | "implicit";
+export type RelationshipOrigin = "explicit" | "implicit" | "inferred" | "auto";
+
+/**
+ * Metadata for relationship types used in graph traversal
+ */
+export interface RelationshipMetadata {
+  directed: boolean;          // Is the relationship directional?
+  transitive: boolean;        // Can it be followed transitively? (A->B->C means A->C)
+  inverseType?: RelationshipType;  // What type represents the inverse?
+  traversalWeight: number;    // Higher = more important for retrieval (0-1)
+}
+
+/**
+ * Relationship metadata for intelligent graph traversal
+ */
+export const RELATIONSHIP_METADATA: Record<RelationshipType, RelationshipMetadata> = {
+  supports: {
+    directed: true,
+    transitive: false,
+    traversalWeight: 0.8
+  },
+  contradicts: {
+    directed: false,
+    transitive: false,
+    traversalWeight: 0.9
+  },
+  builds_on: {
+    directed: true,
+    transitive: true,
+    traversalWeight: 0.85
+  },
+  replaces: {
+    directed: true,
+    transitive: true,
+    inverseType: 'replaces',
+    traversalWeight: 0.7
+  },
+  requires: {
+    directed: true,
+    transitive: true,
+    inverseType: 'depends_on',
+    traversalWeight: 0.9
+  },
+  related_to: {
+    directed: false,
+    transitive: false,
+    traversalWeight: 0.5
+  },
+  caused_by: {
+    directed: true,
+    transitive: true,
+    inverseType: 'caused_by',
+    traversalWeight: 0.85
+  },
+  depends_on: {
+    directed: true,
+    transitive: true,
+    inverseType: 'requires',
+    traversalWeight: 0.9
+  },
+  example_of: {
+    directed: true,
+    transitive: false,
+    traversalWeight: 0.7
+  },
+  part_of: {
+    directed: true,
+    transitive: true,
+    traversalWeight: 0.8
+  },
+  derived_from: {
+    directed: true,
+    transitive: false,
+    traversalWeight: 0.75
+  },
+  precedes: {
+    directed: true,
+    transitive: true,
+    traversalWeight: 0.6
+  },
+};
+
+// ============================================
+// PHASE 1 MEMORY TYPES
+// ============================================
+
+/**
+ * Decay function types
+ */
+export type DecayFunction = 'exponential' | 'linear' | 'power_law' | 'none';
+
+/**
+ * Chunk status for tiered memory
+ */
+export type ChunkStatus = 'active' | 'warm' | 'cool' | 'cold' | 'archived' | 'tombstone';
+
+/**
+ * Learning context stored with each chunk
+ * Enables "memory time travel" - context-triggered retrieval boost
+ */
+export interface LearningContext {
+  tick: number;                    // Tick when learned
+  task_id: string | null;          // Task being executed
+  goal_id: string | null;          // Active goal
+  phase: string;                   // Phase (research/planning/execution/etc)
+  skill_area: string | null;       // Skill area being worked on
+  query_context: string;           // Query/task that prompted learning
+  related_chunks: string[];        // Other chunks retrieved at same time
+}
+
+/**
+ * Tick-based agent state for memory tracking
+ * (Distinct from AgentState which tracks runtime status)
+ */
+export interface TickState {
+  project_id: string;
+  current_tick: number;
+  last_decay_tick: number;
+  last_consolidation_tick: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Current context for retrieval (used for context boost)
+ */
+export interface RetrievalContext {
+  tick: number;
+  task_id: string | null;
+  goal_id: string | null;
+  phase: string;
+  skill_area: string | null;
+  query: string;
+}
+
+/**
+ * Search result with context boost info
+ */
+export interface BoostedSearchResult {
+  chunk: ChunkV2;
+  rawSimilarity: number;
+  score: number;
+  boosted: boolean;
+  boostReason?: 'strong_context_match' | 'moderate_context_match' | 'memory_reactivation';
+  sources: {
+    semantic?: number;
+    keyword?: number;
+    graph?: number;
+  };
+}
 
 // -----------------------------------------------------------------------------
 // Orientation Layer
@@ -101,6 +256,9 @@ export interface Task {
   failure_reason: string | null;
   failure_context: FailureContext | null;
   failed_at: string | null;
+  // Pivot/cancellation tracking
+  cancelled_reason: string | null;
+  cancelled_at: string | null;
 }
 
 export interface FailureContext {
@@ -152,6 +310,60 @@ export interface Chunk {
   last_accessed: string;
   last_useful: string | null;
   embedding?: Float32Array;
+
+  // Phase 1 fields (optional for backward compatibility)
+  tick_created?: number;
+  tick_last_accessed?: number | null;
+  tick_last_useful?: number | null;
+  learning_context?: LearningContext;
+  initial_strength?: number;
+  current_strength?: number;
+  decay_function?: DecayFunction;
+  decay_rate?: number;
+  persistence_score?: number;
+  access_count?: number;
+  successful_uses?: number;
+  status?: ChunkStatus;
+  pinned?: boolean;
+  superseded_by?: string | null;
+  valid_until_tick?: number | null;
+}
+
+/**
+ * Extended chunk with Phase 1 memory fields (all required)
+ */
+export interface ChunkV2 extends Omit<Chunk,
+  'tick_created' | 'tick_last_accessed' | 'tick_last_useful' | 'learning_context' |
+  'initial_strength' | 'current_strength' | 'decay_function' | 'decay_rate' |
+  'persistence_score' | 'access_count' | 'successful_uses' | 'status' | 'pinned' |
+  'superseded_by' | 'valid_until_tick'
+> {
+  // Tick-based timing
+  tick_created: number;
+  tick_last_accessed: number | null;
+  tick_last_useful: number | null;
+
+  // Learning context
+  learning_context: LearningContext;
+
+  // Strength & Decay
+  initial_strength: number;
+  current_strength: number;
+  decay_function: DecayFunction;
+  decay_rate: number;
+
+  // Persistence
+  persistence_score: number;
+  access_count: number;
+  successful_uses: number;
+
+  // Status
+  status: ChunkStatus;
+  pinned: boolean;
+
+  // Versioning
+  superseded_by: string | null;
+  valid_until_tick: number | null;
 }
 
 export interface Relationship {

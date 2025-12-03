@@ -4,7 +4,15 @@
       "Bash(dir \"C:\\Visioneer\\visioneer\\artifacts\" /s /b)",
       "Bash(sqlite3:*)",
       "Bash(npm run status:*)",
-      "Bash(powershell:*)"
+      "Bash(powershell:*)",
+      "Bash(find:*)",
+      "Bash(dir:*)",
+      "Bash(cat node_modules/@anthropic-ai/claude-agent-sdk/package.json)",
+      "Bash(cat:*)",
+      "Bash(npm run sdk:test:*)",
+      "Write(C:\\Visioneer\\visioneer\\artifacts\\**)",
+      "Edit(C:\\Visioneer\\visioneer\\artifacts\\**)",
+      "Read(C:\\Visioneer\\visioneer\\artifacts\\**)"
     ],
     "deny": [],
     "ask": []

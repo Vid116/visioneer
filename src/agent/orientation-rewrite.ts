@@ -1,32 +1,27 @@
 /**
  * Orientation Rewrite Module
  *
- * Handles the automatic rewriting of the orientation document when triggers occur.
- * This module summarizes progress, updates the skill map, and refreshes priorities.
+ * Uses Claude Agent SDK for orientation updates.
+ *
+ * Architecture:
+ * - Visioneer = Memory Brain (provides current state, triggers rewrite)
+ * - Claude Code SDK = Execution Hands (analyzes progress, generates updated orientation)
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Orientation, Task, Goal, Phase } from "../utils/types.js";
-import {
-  getOrientation,
-  saveOrientation,
-  getTasks,
-  getActiveGoal,
-  getRecentActivity,
-  storeChunk,
-  logActivity,
-} from "../db/queries.js";
-import { getAgentConfig } from "../utils/config.js";
 import { dbLogger } from "../utils/logger.js";
+import { getOrientation, getRecentActivity } from "../db/queries.js";
 
 // =============================================================================
-// Types
+// Types (same as original)
 // =============================================================================
 
 export type RewriteTrigger =
   | "major_milestone"
   | "activity_threshold"
   | "goal_change"
+  | "user_pivot"
   | "manual";
 
 export interface RewriteResult {
@@ -36,105 +31,7 @@ export interface RewriteResult {
   error?: string;
 }
 
-// =============================================================================
-// Main Rewrite Function
-// =============================================================================
-
-/**
- * Performs an orientation rewrite.
- * This calls Claude to generate an updated orientation based on progress.
- */
-export async function rewriteOrientation(
-  projectId: string,
-  trigger: RewriteTrigger,
-  additionalContext?: string
-): Promise<RewriteResult> {
-  dbLogger.info("Starting orientation rewrite", { projectId, trigger });
-
-  // Get current state
-  const currentOrientation = getOrientation(projectId);
-  if (!currentOrientation) {
-    return {
-      success: false,
-      error: "No orientation found for project",
-    };
-  }
-
-  const allTasks = getTasks(projectId);
-  const recentActivity = getRecentActivity(projectId, 20);
-  const currentGoal = getActiveGoal(projectId);
-
-  // Archive current orientation
-  storeChunk(
-    projectId,
-    JSON.stringify(currentOrientation),
-    "decision",
-    ["orientation_archive", `v${currentOrientation.version}`],
-    "verified",
-    "deduction"
-  );
-
-  try {
-    // Build context for Claude
-    const context = buildRewriteContext(
-      currentOrientation,
-      allTasks,
-      currentGoal,
-      recentActivity,
-      trigger,
-      additionalContext
-    );
-
-    // Call Claude for rewrite
-    const newOrientationData = await callClaudeForRewrite(context);
-
-    if (!newOrientationData) {
-      return {
-        success: false,
-        error: "Failed to generate new orientation",
-      };
-    }
-
-    // Create and save new orientation
-    const newOrientation: Orientation = {
-      project_id: projectId,
-      ...newOrientationData,
-      last_rewritten: new Date().toISOString(),
-      version: currentOrientation.version + 1,
-    };
-
-    saveOrientation(newOrientation);
-
-    logActivity(projectId, "Orientation rewritten", {
-      trigger,
-      previousVersion: currentOrientation.version,
-      newVersion: newOrientation.version,
-    });
-
-    dbLogger.info("Orientation rewrite complete", {
-      projectId,
-      newVersion: newOrientation.version,
-    });
-
-    return {
-      success: true,
-      newOrientation,
-      previousVersion: currentOrientation.version,
-    };
-  } catch (error) {
-    dbLogger.error("Orientation rewrite failed", { projectId, error });
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-// =============================================================================
-// Context Building
-// =============================================================================
-
-interface RewriteContext {
+export interface RewriteContext {
   currentOrientation: Orientation;
   taskSummary: {
     total: number;
@@ -150,7 +47,89 @@ interface RewriteContext {
   additionalContext?: string;
 }
 
-function buildRewriteContext(
+// =============================================================================
+// Pivot Signal Detection
+// =============================================================================
+
+/**
+ * Signal words/phrases that indicate the user wants to change direction.
+ * These are checked case-insensitively in user answers.
+ */
+const PIVOT_SIGNALS = [
+  // Direct stop signals
+  "stop",
+  "halt",
+  "abort",
+  // Direction change
+  "wrong direction",
+  "wrong approach",
+  "not what i want",
+  "not what i meant",
+  "misunderstood",
+  // Pivot language
+  "pivot",
+  "change direction",
+  "change approach",
+  "different approach",
+  "new direction",
+  "new approach",
+  // Start over
+  "start over",
+  "start fresh",
+  "begin again",
+  "from scratch",
+  // Cancel/reject
+  "scrap",
+  "forget",
+  "ignore",
+  "cancel",
+  "abandon",
+  "drop this",
+  // Explicit correction
+  "actually",
+  "instead",
+  "rather than",
+  "let's not",
+  "don't do",
+  // Priority shift
+  "focus on something else",
+  "more important",
+  "priority change",
+];
+
+/**
+ * Detects if user input contains pivot signals indicating a major direction change.
+ *
+ * @param content The user's answer or input text
+ * @returns true if pivot signals detected, false otherwise
+ */
+export function detectPivotSignals(content: string): boolean {
+  const lower = content.toLowerCase();
+
+  // Check each signal word/phrase
+  for (const signal of PIVOT_SIGNALS) {
+    if (lower.includes(signal)) {
+      dbLogger.info("Pivot signal detected", { signal, contentPreview: content.slice(0, 100) });
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Extracts the specific pivot signals found in content for logging.
+ */
+export function extractPivotSignals(content: string): string[] {
+  const lower = content.toLowerCase();
+  return PIVOT_SIGNALS.filter(signal => lower.includes(signal));
+}
+
+// =============================================================================
+// Context Building (preserved from original)
+// =============================================================================
+
+export function buildRewriteContext(
   orientation: Orientation,
   tasks: Task[],
   goal: Goal | null,
@@ -188,16 +167,36 @@ function buildRewriteContext(
 }
 
 // =============================================================================
-// Claude API Call
+// Prompt Building
 // =============================================================================
 
-async function callClaudeForRewrite(
-  context: RewriteContext
-): Promise<Omit<Orientation, "project_id" | "last_rewritten" | "version"> | null> {
-  const config = getAgentConfig();
-  const client = new Anthropic();
+function buildRewritePrompt(context: RewriteContext): string {
+  // Build the critical user feedback section for pivot triggers
+  let pivotSection = "";
+  if (context.trigger === "user_pivot" && context.additionalContext) {
+    pivotSection = `
 
-  const systemPrompt = `You are an AI assistant that helps manage long-running learning and execution projects.
+## CRITICAL USER FEEDBACK - DIRECTION CHANGE REQUIRED
+
+The user has indicated a significant change in direction:
+
+"${context.additionalContext}"
+
+You MUST incorporate this feedback into the updated orientation:
+1. UPDATE vision_summary to reflect the new direction
+2. REVISE success_criteria to align with user's corrected expectations
+3. ADJUST constraints based on any new priorities mentioned
+4. MARK affected skills as needing re-evaluation
+5. ADD a key_decision documenting this pivot with the user's reasoning
+6. RE-PRIORITIZE active_priorities to focus on the new direction
+7. UPDATE progress_snapshot to reflect that previous work may no longer apply
+
+This is a PIVOT - the user is explicitly correcting course. Previous assumptions may be invalid.
+`;
+  }
+
+  // Combine system prompt and user prompt into a single prompt for SDK
+  return `You are an AI assistant that helps manage long-running learning and execution projects.
 Your task is to update an orientation document based on recent progress.
 
 The orientation document serves as the "strategic brain" of the project, containing:
@@ -218,13 +217,13 @@ When updating the orientation:
 5. Add new decisions if warranted
 6. Advance the phase if appropriate
 7. Update blockers based on current state
+${pivotSection}
+---
 
-Return ONLY valid JSON matching the orientation structure.`;
-
-  const userPrompt = `Please update the orientation document based on the following context:
+Please update the orientation document based on the following context:
 
 TRIGGER: ${context.trigger}
-${context.additionalContext ? `\nADDITIONAL CONTEXT: ${context.additionalContext}` : ""}
+${context.additionalContext && context.trigger !== "user_pivot" ? `\nADDITIONAL CONTEXT: ${context.additionalContext}` : ""}
 
 CURRENT GOAL: ${context.currentGoal || "No specific goal set"}
 
@@ -240,71 +239,215 @@ TASK SUMMARY:
 - Recently completed (since last rewrite): ${context.taskSummary.recentlyCompleted.join(", ") || "None"}
 
 RECENT ACTIVITY:
-${context.recentActivitySummary.map((a) => `- ${a}`).join("\n")}
+${context.recentActivitySummary.length > 0 ? context.recentActivitySummary.map((a) => `- ${a}`).join("\n") : "- No recent activity"}
 
-Please provide an updated orientation document. The response should be a valid JSON object with these fields:
-- vision_summary (string)
-- success_criteria (array of strings)
-- constraints (array of strings)
-- skill_map (array of skill objects)
-- current_phase (one of: intake, research, planning, execution, refinement, complete)
-- key_decisions (array of decision objects with decision, reasoning, date fields)
-- active_priorities (array of strings, top 3-5)
-- progress_snapshot (array of progress objects)`;
+---
+
+Respond with ONLY a valid JSON object (no markdown code blocks, no extra text). The JSON must have exactly these fields:
+
+{
+  "vision_summary": "string - the project vision",
+  "success_criteria": ["array of success criteria strings"],
+  "constraints": ["array of constraint strings"],
+  "skill_map": [
+    {
+      "skill": "skill name",
+      "parent": "parent skill name or null",
+      "dependencies": ["array of dependency skill names"],
+      "status": "not_started | in_progress | achieved",
+      "notes": "brief notes"
+    }
+  ],
+  "current_phase": "intake | research | planning | execution | refinement | complete",
+  "key_decisions": [
+    {
+      "decision": "what was decided",
+      "reasoning": "why it was decided",
+      "date": "ISO date string"
+    }
+  ],
+  "active_priorities": ["array of 3-5 current priority strings"],
+  "progress_snapshot": [
+    {
+      "area": "area name",
+      "status": "not_started | early | progressing | nearly_done | complete",
+      "percent": 0-100 or null,
+      "blockers": ["array of blocker strings"]
+    }
+  ]
+}
+
+Output ONLY the JSON object now.`;
+}
+
+// =============================================================================
+// Response Parsing
+// =============================================================================
+
+type OrientationData = Omit<Orientation, "project_id" | "last_rewritten" | "version">;
+
+function parseOrientationResponse(
+  content: string,
+  fallbackOrientation: Orientation
+): OrientationData {
+  // Try to extract JSON from response
+  let jsonStr = content;
+
+  // Try to extract from code block if present
+  const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (codeBlockMatch) {
+    jsonStr = codeBlockMatch[1];
+  }
+
+  // Also try to find raw JSON object
+  const jsonObjectMatch = content.match(/\{[\s\S]*"vision_summary"[\s\S]*\}/);
+  if (jsonObjectMatch && !codeBlockMatch) {
+    jsonStr = jsonObjectMatch[0];
+  }
+
+  jsonStr = jsonStr.trim();
 
   try {
-    const response = await client.messages.create({
-      model: config.model || "claude-sonnet-4-20250514",
-      max_tokens: 4096,
-      messages: [
-        {
-          role: "user",
-          content: userPrompt,
-        },
-      ],
-      system: systemPrompt,
-    });
-
-    // Extract text from response
-    const textContent = response.content.find((c) => c.type === "text");
-    if (!textContent || textContent.type !== "text") {
-      dbLogger.error("No text content in Claude response");
-      return null;
-    }
-
-    // Parse JSON from response
-    const jsonMatch = textContent.text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      dbLogger.error("No JSON found in Claude response");
-      return null;
-    }
-
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = JSON.parse(jsonStr);
 
     // Validate required fields
-    if (
-      !parsed.vision_summary ||
-      !parsed.success_criteria ||
-      !parsed.current_phase
-    ) {
-      dbLogger.error("Missing required fields in orientation response");
-      return null;
+    if (!parsed.vision_summary || !parsed.current_phase) {
+      throw new Error("Missing required fields: vision_summary or current_phase");
+    }
+
+    // Validate phase is valid
+    const validPhases: Phase[] = ["intake", "research", "planning", "execution", "refinement", "complete"];
+    if (!validPhases.includes(parsed.current_phase)) {
+      dbLogger.warn("Invalid phase, using current", { received: parsed.current_phase });
+      parsed.current_phase = fallbackOrientation.current_phase;
     }
 
     return {
       vision_summary: parsed.vision_summary,
-      success_criteria: parsed.success_criteria,
-      constraints: parsed.constraints || [],
-      skill_map: parsed.skill_map || [],
+      success_criteria: Array.isArray(parsed.success_criteria) ? parsed.success_criteria : fallbackOrientation.success_criteria,
+      constraints: Array.isArray(parsed.constraints) ? parsed.constraints : fallbackOrientation.constraints,
+      skill_map: Array.isArray(parsed.skill_map) ? parsed.skill_map : fallbackOrientation.skill_map,
       current_phase: parsed.current_phase as Phase,
-      key_decisions: parsed.key_decisions || [],
-      active_priorities: parsed.active_priorities || [],
-      progress_snapshot: parsed.progress_snapshot || [],
+      key_decisions: Array.isArray(parsed.key_decisions) ? parsed.key_decisions : fallbackOrientation.key_decisions,
+      active_priorities: Array.isArray(parsed.active_priorities) ? parsed.active_priorities : fallbackOrientation.active_priorities,
+      progress_snapshot: Array.isArray(parsed.progress_snapshot) ? parsed.progress_snapshot : fallbackOrientation.progress_snapshot,
     };
   } catch (error) {
-    dbLogger.error("Claude API call failed for orientation rewrite", { error });
-    return null;
+    dbLogger.error("Failed to parse orientation response", {
+      error: String(error),
+      content: content.slice(0, 500),
+    });
+    throw new Error(`Failed to parse orientation response: ${error}`);
   }
+}
+
+// =============================================================================
+// Main SDK Rewrite Function
+// =============================================================================
+
+/**
+ * Rewrites orientation using Claude Agent SDK.
+ * This is a pure function that takes context and returns updated orientation data.
+ *
+ * @param context The rewrite context containing current state
+ * @returns Updated orientation data (without project_id, version, last_rewritten)
+ */
+export async function rewriteOrientation(
+  context: RewriteContext
+): Promise<OrientationData> {
+  dbLogger.info("Starting SDK orientation rewrite", {
+    trigger: context.trigger,
+    currentPhase: context.currentOrientation.current_phase,
+    tasksDone: context.taskSummary.done,
+  });
+
+  const prompt = buildRewritePrompt(context);
+
+  try {
+    const result = query({
+      prompt,
+      options: {
+        maxTurns: 1, // Single response, no back-and-forth
+        allowedTools: [], // No tools needed - pure analysis/summarization
+      },
+    });
+
+    let responseText = "";
+    let sessionId = "";
+    let durationMs = 0;
+
+    // Stream through messages to get the result
+    for await (const message of result) {
+      if (message.type === "system") {
+        const msg = message as Record<string, unknown>;
+        if (msg.subtype === "init") {
+          sessionId = msg.session_id as string;
+        }
+      }
+
+      if (message.type === "result") {
+        const msg = message as Record<string, unknown>;
+        responseText = msg.result as string;
+        durationMs = msg.duration_ms as number;
+      }
+    }
+
+    if (!responseText) {
+      throw new Error("No response received from SDK");
+    }
+
+    dbLogger.debug("SDK orientation rewrite response received", {
+      sessionId,
+      durationMs,
+      responseLength: responseText.length,
+    });
+
+    // Parse the response into orientation data
+    const orientationData = parseOrientationResponse(responseText, context.currentOrientation);
+
+    dbLogger.info("SDK orientation rewrite complete", {
+      newPhase: orientationData.current_phase,
+      prioritiesCount: orientationData.active_priorities.length,
+      durationMs,
+    });
+
+    return orientationData;
+  } catch (error) {
+    dbLogger.error("SDK orientation rewrite failed", { error: String(error) });
+    throw error;
+  }
+}
+
+/**
+ * Convenience function that builds context and rewrites in one call.
+ * Mirrors the signature pattern of the original rewriteOrientation.
+ */
+export async function rewriteOrientationFromState(
+  orientation: Orientation,
+  tasks: Task[],
+  goal: Goal | null,
+  recentActivity: { action: string; timestamp: string }[],
+  trigger: RewriteTrigger,
+  additionalContext?: string
+): Promise<Orientation> {
+  const context = buildRewriteContext(
+    orientation,
+    tasks,
+    goal,
+    recentActivity,
+    trigger,
+    additionalContext
+  );
+
+  const orientationData = await rewriteOrientation(context);
+
+  // Assemble full Orientation object
+  return {
+    project_id: orientation.project_id,
+    ...orientationData,
+    last_rewritten: new Date().toISOString(),
+    version: orientation.version + 1,
+  };
 }
 
 // =============================================================================
@@ -353,19 +496,122 @@ export function shouldRewriteOrientation(
   return null;
 }
 
+// =============================================================================
+// Pivot Handling
+// =============================================================================
+
+import {
+  getTasks,
+  getActiveGoal,
+  cancelTasksForPivot,
+  saveOrientation,
+  logActivity,
+} from "../db/queries.js";
+
 /**
- * Checks for rewrite trigger and performs rewrite if needed.
- * Returns the result if a rewrite occurred, null otherwise.
+ * Result of handling a user pivot.
  */
-export async function checkAndRewriteOrientation(
-  projectId: string,
-  completedTask?: Task | null
-): Promise<RewriteResult | null> {
-  const trigger = shouldRewriteOrientation(projectId, completedTask);
-
-  if (!trigger) {
-    return null;
-  }
-
-  return rewriteOrientation(projectId, trigger);
+export interface PivotResult {
+  success: boolean;
+  tasksCancelled: number;
+  orientationUpdated: boolean;
+  newOrientation?: Orientation;
+  error?: string;
 }
+
+/**
+ * Handles a user pivot: cancels tasks, rewrites orientation, triggers fresh planning.
+ *
+ * This is the main entry point for pivot handling after answerQuestion()
+ * detects pivot signals.
+ *
+ * @param projectId The project ID
+ * @param userFeedback The user's feedback containing the pivot direction
+ * @param pivotSignals The specific signals detected
+ * @returns PivotResult with details of what changed
+ */
+export async function handlePivot(
+  projectId: string,
+  userFeedback: string,
+  pivotSignals: string[]
+): Promise<PivotResult> {
+  dbLogger.info("Handling user pivot", {
+    projectId,
+    pivotSignals,
+    feedbackPreview: userFeedback.slice(0, 100),
+  });
+
+  try {
+    // Step 1: Cancel all non-done tasks
+    const cancelReason = `User pivot: ${pivotSignals.join(", ")}`;
+    const tasksCancelled = cancelTasksForPivot(projectId, cancelReason);
+
+    dbLogger.info("Tasks cancelled for pivot", { projectId, tasksCancelled });
+
+    // Step 2: Get current state for orientation rewrite
+    const orientation = getOrientation(projectId);
+    if (!orientation) {
+      return {
+        success: false,
+        tasksCancelled,
+        orientationUpdated: false,
+        error: "No orientation found for project",
+      };
+    }
+
+    // Get tasks (will be mostly cancelled now, but include for context)
+    const tasks = getTasks(projectId);
+    const goal = getActiveGoal(projectId);
+    const recentActivity = getRecentActivity(projectId, 20);
+
+    // Step 3: Rewrite orientation with pivot context
+    const newOrientation = await rewriteOrientationFromState(
+      orientation,
+      tasks,
+      goal,
+      recentActivity.map(a => ({ action: a.action, timestamp: a.timestamp })),
+      "user_pivot",
+      userFeedback
+    );
+
+    // Step 4: Save the new orientation
+    saveOrientation(newOrientation);
+
+    // Step 5: Log the pivot activity
+    logActivity(projectId, "User pivot processed", {
+      tasksCancelled,
+      pivotSignals,
+      oldPhase: orientation.current_phase,
+      newPhase: newOrientation.current_phase,
+      orientationVersion: newOrientation.version,
+    });
+
+    dbLogger.info("Pivot handling complete", {
+      projectId,
+      tasksCancelled,
+      newOrientationVersion: newOrientation.version,
+    });
+
+    return {
+      success: true,
+      tasksCancelled,
+      orientationUpdated: true,
+      newOrientation,
+    };
+  } catch (error) {
+    dbLogger.error("Pivot handling failed", { projectId, error: String(error) });
+    return {
+      success: false,
+      tasksCancelled: 0,
+      orientationUpdated: false,
+      error: String(error),
+    };
+  }
+}
+
+// =============================================================================
+// Export aliases for compatibility
+// =============================================================================
+
+export { rewriteOrientation as rewriteOrientationSDK };
+export { rewriteOrientationFromState as rewriteOrientationFromStateSDK };
